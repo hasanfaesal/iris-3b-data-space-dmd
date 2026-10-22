@@ -66,6 +66,11 @@ def main():
     ap.add_argument("--checkpoint", default="/home/dev/models/iris-3b")
     ap.add_argument("--cache", default=None, help="embedding cache dir from cache_embeddings.py")
     ap.add_argument("--steps", type=int, default=2400, help="generator updates")
+    ap.add_argument("--preview-every", type=int, default=250, help="preview frequency in gen updates (0 to disable)")
+    ap.add_argument("--ckpt-every", type=int, default=250, help="checkpoint frequency in gen updates")
+    ap.add_argument("--warmup", type=int, default=200, help="fake warmup updates")
+    ap.add_argument("--fake-per-gen", type=int, default=4, help="critic updates per generator update")
+    ap.add_argument("--overfit", type=int, default=0, help="overfit on first N prompts in cache")
     ap.add_argument("--min-std", type=float, default=0.2, help="sentinel floor; 0.7 * teacher pixel std")
     args = ap.parse_args()
 
@@ -75,7 +80,20 @@ def main():
         args.steps = min(args.steps, 4)
     else:
         model, (null, null_mask), batches, device, autocast = build_real(args)
-        cfg = TrainConfig()
+        if args.overfit > 0:
+            from src.data.embed_cache import EmbedCache
+            cache = EmbedCache(args.cache)
+            fixed_y, fixed_mask = cache.get(list(range(args.overfit)))
+            def overfit_batches(_start):
+                while True:
+                    yield {"y": fixed_y, "y_mask": fixed_mask, "hw": (1024, 1024)}
+            batches = overfit_batches
+        cfg = TrainConfig(
+            warmup=args.warmup,
+            fake_per_gen=args.fake_per_gen,
+            preview_every=args.preview_every,
+            ckpt_every=args.ckpt_every,
+        )
     inject_lora(model, "gen", 128 if not args.tiny else 8)
     inject_lora(model, "fake", 64 if not args.tiny else 4)
 
