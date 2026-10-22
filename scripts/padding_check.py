@@ -142,7 +142,8 @@ def main():
         from src.data.embed_cache import EmbedCache, load_null
         from src.models.loading import load_dataspace_iris
 
-        model, mcfg = load_dataspace_iris(args.checkpoint)
+        model, _ = load_dataspace_iris(args.checkpoint)
+        mcfg = model.cfg
         cache = EmbedCache(args.cache)
         null_cut, null_mask_cut = load_null(args.cache)
         hw = (1024, 1024)
