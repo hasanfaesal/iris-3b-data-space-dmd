@@ -251,3 +251,28 @@ with torch.autocast("cuda", dtype=torch.bfloat16):
   - Compare raw checkpoint weights vs EMA weights once step 100 finishes.
 
 
+## 17. Text padding fix: cache and null padded to 300 (2026-10-22)
+
+- Problem: the trunk's joint attention does not mask pad tokens, and Iris always
+  encodes text at `text_len = 300`. `EmbedCache.get` padded each batch only to its
+  longest prompt, and `null.pt` was stored at its true length (~20 tokens). So the
+  teacher's cond and uncond passes saw different sequence lengths than sampling does.
+  The text refiner masks pads, but its outputs at pad positions are nonzero and
+  become keys/values in the trunk, so the mismatch is real.
+- Fix (`src/data/embed_cache.py`): `EmbedCache(cache_dir, length=TEXT_LEN)` pads every
+  batch to 300 with zeros and mask 0. `load_null` pads the null to 300 the same way.
+  Rows or nulls longer than 300 raise `ValueError` instead of truncating.
+- Cache files on disk are unchanged. No recompute needed: the stored rows are the
+  real-token prefix of `encode()` output, and `encode()` zeroes its pad positions.
+- Tests (`tests/test_embed_cache.py`): batches and null are length 300 (checked with a
+  small length), rows match files, padding is zero with mask 0, over-long rows rejected.
+  Full suite: 43 passed.
+- NOT yet verified on GPU: that padded cache output is bit-exact with `encode()` at 300
+  tokens. Needs a check on the H100 with real Qwen.
+- Consequences:
+  - Stage 8 (running before the fix) used truncated text; its checkpoints are for
+    mechanics only and shouldn't be compared with the real sampler.
+  - Sync the fix to the H100 node before any new run.
+  - Memory will be higher than the Stage 8 numbers, since text is always 300 tokens.
+    Re-measure the peak after the change.
+  - The padding check (teacher velocity, 300 vs real-length text) is still outstanding.
