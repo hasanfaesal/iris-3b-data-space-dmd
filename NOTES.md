@@ -316,3 +316,26 @@ with torch.autocast("cuda", dtype=torch.bfloat16):
     unlike a global scale).
 - Status: overfit_v2 (mean loss + EMA warmup + padded text, warmup 20) is the first test; judge it
   on RAW-weight renders (the sentinel only watches EMA previews).
+
+## 19. Verification ramp: micro-batch sweep & production budget (2026-10-22)
+
+Node: iris-dsdmd-h100-s7. Script: `run_verification.py --ac full --mbs 4 8 10 12`, 3 timed repeats per mb.
+Log: `runs/verify_ramp/verify_ramp.log`, `runs/verify_ramp/verification.json`.
+
+Gates: teacher parity worst rel err 0.0139 (tol 0.05) PASS; zero-init identity max abs diff 0.0 PASS;
+no dead adapters PASS. Teacher 1 MP forward F = 0.128 s -> 4:1 critic ratio stands.
+
+| mb | rows | peak alloc | peak reserved | fake s/row | gen s/row | total s/row | projected 4:1 update |
+|----|------|------------|---------------|------------|-----------|-------------|----------------------|
+| 4  | 16   | 24.0 GB    | 26.1 GB       | 0.915      | 1.177     | 2.092       | ~77.4 s              |
+| 8  | 32   | 36.0 GB    | 42.3 GB       | 0.885      | 1.145     | 2.030       | ~74.9 s              |
+| 10 | 40   | 41.9 GB    | 52.3 GB       | 0.881      | 1.134     | 2.014       | ~74.5 s              |
+| 12 | 48   | 47.9 GB    | 62.8 GB       | 0.877      | 1.129     | 2.007       | ~74.2 s              |
+
+- Memory is not the constraint; per-row compute plateaus from mb 8. Going 4 -> 12 saves ~4%.
+- Decision: production stays at mb 4 (global batch 16 = 4 chunks, all four `r` values every update).
+  Peak 26 GB leaves room for previews and diagnostics.
+- Budget at mb 4: ~75-77 s per 4:1 update -> 2,400 gen updates ~ 50 h of node time.
+- Open: confirm the ramp used 300-token padded text (reserved 26.1 GB at mb 4 is slightly below the
+  26.9 GB from section 14, which padding should have raised). If it used short text, re-time before budgeting.
+- mb 16 not run; VRAM fragmentation risk near 80 GB is unmeasured.
