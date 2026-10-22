@@ -286,3 +286,32 @@ with torch.autocast("cuda", dtype=torch.bfloat16):
   - Memory will be higher than the Stage 8 numbers, since text is always 300 tokens.
     Re-measure the peak after the change.
   - The padding check (teacher velocity, 300 vs real-length text) is still outstanding.
+
+## 18. Raw Weight Inference & Generator Loss Gradient Scaling (2026-10-22)
+
+- Raw weight inference test from `gen000100.pt` on prompt 00 & 04 (`runs/overfit/raw_eval/`):
+  - Result: extreme high-frequency texture collapse / TV-static noise across the entire image
+    (pixel std = 0.4432, full-spectrum saturated RGB noise).
+  - This is classic texture collapse, previously observed in community runs at high effective step sizes.
+- Root Cause Analysis:
+  1. Generator loss in `src/engine/losses.py:56`:
+     ```python
+     return (x0 * direction).flatten(1).sum(1).mean()
+     ```
+     Summing across all pixel dimensions on ~1 MP images (3 * 1024 * 1024 = 3,145,728 elements)
+     multiplied backpropagated gradients by ~3.15 million relative to mean pixel error.
+  2. Logged gradient norms throughout training were astronomical: `gnorm ≈ 3e+05` to `7e+05` (300,000–700,000!).
+  3. While `clip_grad_norm_(params, 1.0)` downscaled the vector length to 1.0, the optimizer update
+     direction was dominated by high-frequency spatial gradients, causing individual LoRA layers
+     (especially `t_embedder` and `adaln_img` cores) to violently over-steer into high-frequency static.
+  4. The preview images appeared blurry because EMA shadow weights were 93% frozen at zero, which
+     mathematically filtered the exploded high-frequency noise down into a low-contrast grayish haze
+     (pixel std 0.0701).
+- Prescriptions for Next Stage:
+  - Normalize generator loss across pixel dimensions (`.mean(1)` instead of `.sum(1)`), or adopt
+    the official Iris-Turbo TDM scale normalization `(v_pos - v_fake) / scale`.
+  - With normalized gradients, gradient norms will sit in normal numerical ranges (~0.1–10.0),
+    preventing LoRA weight saturation and texture collapse.
+  - Implement EMA warmup schedule (`decay = min(0.999, (1 + step) / (10 + step))`) so previews
+    faithfully track training dynamics from step 1.
+
