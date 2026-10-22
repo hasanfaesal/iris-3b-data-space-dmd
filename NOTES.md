@@ -216,3 +216,38 @@ with torch.autocast("cuda", dtype=torch.bfloat16):
   installed from hasanfaesal/iris-wheels-temp via curl of wheel files (uv can't resolve
   system-site torch; pip fallback can). vendor/iris-3b used via PYTHONPATH (no hatchling
   in the wheels repo, so no pip -e).
+
+## 15. Stage 8 Overfit Run & Early Halt Diagnostics (2026-10-22)
+
+- Cache generation completed: 23,926 train embeddings (138.8 GB) + 100 eval embeddings (592 MB)
+  written to `/home/dev/cache` and `/home/dev/cache_eval`. 10-prompt bit-exact verify gate passed.
+- Overfit run launched: 16 prompts, 100 gen updates, 4:1 TTUR ratio, warmup=20.
+- At update 50 (turn 270), `StdSentinel` triggered early exit (`sys.exit(2)`):
+  `preview gen=25 pixel_std=0.0700`, `preview gen=50 pixel_std=0.0701`.
+  Root cause: `--min-std` default is 0.20 (based on fully converged natural image std ~0.30),
+  while early 4-step generator renders produce smooth drafts with pixel std ~0.070.
+  With `patience=2`, the guard cleanly declared collapse and saved `gen000050.pt` and `last.pt`.
+- Fix & Resume: Resumed from `gen000050.pt` with `--min-std 0.04` to allow training to complete
+  steps 51-100 without false-positive collapse halts.
+- Previews exported: All 16 preview images for step 25 and step 50 exported locally to
+  `previews/step000025/` and `previews/step000050/`.
+
+## 16. Visual Analysis & EMA Lag Diagnostic on Early Previews (2026-10-22)
+
+- Inspection of `step000025` and `step000050` (`04.png`):
+  - Previews appear as smooth, low-contrast washed-out fields (mean ~171, std ~0.070) with
+    visible 16x16 patch checkerboard artifacts and identical gross shapes ("Y" contour).
+  - Step 25 and Step 50 are visually indistinguishable.
+- Root Cause Identified:
+  1. `preview()` strictly samples under `self.ema.applied()`.
+  2. With `ema_decay = 0.999`, after only 50 updates the EMA shadow weights have incorporated
+     only `1 - 0.999^50 ≈ 4.9%` of the generator updates. The weights used for rendering
+     are still ~95% frozen at the initial zero-LoRA state.
+  3. Consequently, the preview is effectively rendering the bare base teacher's unconditioned
+     4-step rollout from zero init, rather than the student's active weights.
+- Takeaway / Diagnostic Plan:
+  - In short smoke tests (<= 100 steps), evaluate previews using raw generator weights (or
+    use an EMA warmup schedule `decay = min(0.999, (1 + step) / (10 + step))`).
+  - Compare raw checkpoint weights vs EMA weights once step 100 finishes.
+
+
