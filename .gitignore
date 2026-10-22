@@ -1,3 +1,7 @@
 *.pdf
 *.md
 !README.md
+!NOTES.md
+vendor/
+.venv/
+__pycache__/
