@@ -5,6 +5,8 @@
 # Remember: stop_node the moment verification finishes.
 set -euo pipefail
 
+# the node's pip mirror serves big index pages (~1 MB) in 30-40 s; pip's default 15 s read timeout fails
+export PIP_DEFAULT_TIMEOUT="${PIP_DEFAULT_TIMEOUT:-180}" PIP_RETRIES="${PIP_RETRIES:-10}"
 IRIS_COMMIT=13fcf6a4f7fcb36561eac3daa5ad30d0b0a1822e   # same commit NOTES.md was read from
 MODELS=/home/dev/models
 
