@@ -3,11 +3,12 @@
     python scripts/cache_embeddings.py --out /home/dev/cache            # H100, after model download
     python scripts/cache_embeddings.py --out /home/dev/cache --verify 10
 
-Encodes data/prompts_train.jsonl row-order into <out>/shard_XXXX.pt (512 prompts per
-shard, each row stored unpadded [T,12,2560] bf16 + length) plus <out>/null.pt and
-<out>/index.json. The 200 eval prompts go to <out>_eval/ the same way. Existing
-shards are kept, so an interrupted run resumes where it stopped. The Iris-3B DiT is
-never loaded: only cfg.text_encoder is read from the checkpoint.
+Encodes data/prompts_train.jsonl row-order into <out>/row_XXXXXX.pt — one file per prompt,
+unpadded [T,12,2560] bf16 (T = true token count) — plus <out>/null.pt and <out>/index.json.
+The 200 eval prompts go to <out>_eval/ the same way. One file per prompt so training reads
+~4 MB randomly per row instead of a multi-GB shard; existing row files are kept, so an
+interrupted run resumes where it stopped. The Iris-3B DiT is never loaded: only
+cfg.text_encoder is read from the checkpoint.
 """
 
 import argparse
@@ -21,8 +22,6 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / "tests")]
-
-SHARD = 512
 
 
 def sha256(path: Path) -> str:
@@ -43,48 +42,43 @@ def load_prompts(path: Path) -> list[str]:
 @torch.no_grad()
 def cache_prompts(prompts: list[str], out: Path, enc, batch: int) -> None:
     out.mkdir(parents=True, exist_ok=True)
-    for s in range(0, len(prompts), SHARD):
-        shard = s // SHARD
-        path = out / f"shard_{shard:04d}.pt"
-        if path.exists():
+    for b in range(0, len(prompts), batch):
+        idx = range(b, min(b + batch, len(prompts)))
+        if all((out / f"row_{i:06d}.pt").exists() for i in idx):
             continue
-        chunk = prompts[s : s + SHARD]
-        rows, lengths = [], []
-        for b in range(0, len(chunk), batch):
-            e = enc.encode(chunk[b : b + batch])
-            for i, n in enumerate(e.mask.sum(-1).tolist()):
-                rows.append(e.embeddings[i, :n].to(torch.bfloat16).cpu())
-                lengths.append(n)
-        tmp = path.with_suffix(".tmp")
-        torch.save({"rows": rows, "lengths": lengths}, tmp)
-        os.replace(tmp, path)
-        print(f"{path}: {s + len(chunk)}/{len(prompts)}", flush=True)
+        e = enc.encode(prompts[b : b + batch])
+        for j, i in enumerate(idx):
+            n = int(e.mask[j].sum())
+            p = out / f"row_{i:06d}.pt"
+            tmp = p.with_suffix(".tmp")  # atomic: a crash never leaves a torn row file
+            torch.save(e.embeddings[j, :n].to(torch.bfloat16).cpu(), tmp)
+            os.replace(tmp, p)
+        print(f"{out}: {idx[-1] + 1}/{len(prompts)}", flush=True)
 
 
 @torch.no_grad()
-def verify(prompts: list[str], out: Path, enc, n: int) -> None:
-    """PLAN.md check: re-encode n rows live and compare bit-exact against the cache."""
+def verify(prompts: list[str], out: Path, enc, n: int, batch: int) -> None:
+    """PLAN.md check: re-encode the ORIGINAL batch containing each sampled row and compare
+    bit-exact against the cache. Batch composition is kept because cuBLAS kernel choice
+    depends on it — re-encoding one row alone can differ in bits with nothing wrong."""
     import random
 
     rng = random.Random(0)
     for i in rng.sample(range(len(prompts)), n):
-        shard, off = divmod(i, SHARD)
-        cached = torch.load(out / f"shard_{shard:04d}.pt", weights_only=True)["rows"][off]
-        e = enc.encode([prompts[i]])
-        live = e.embeddings[0, : e.mask[0].sum()].to(torch.bfloat16).cpu()
+        b = (i // batch) * batch
+        e = enc.encode(prompts[b : b + batch])
+        live = e.embeddings[i - b, : e.mask[i - b].sum()].to(torch.bfloat16).cpu()
+        cached = torch.load(out / f"row_{i:06d}.pt", weights_only=True)
         if live.shape != cached.shape or not torch.equal(live, cached):
             raise SystemExit(f"verify FAILED at row {i}")
     print(f"verified {n}/{len(prompts)} rows bit-exact", flush=True)
 
 
 def write_index(prompts_path: Path, out: Path) -> None:
-    n_shards = len(list(out.glob("shard_*.pt")))
     index = {
         "prompts_file": str(prompts_path),
         "sha256": sha256(prompts_path),
         "n": len(load_prompts(prompts_path)),
-        "shard_size": SHARD,
-        "n_shards": n_shards,
     }
     tmp = (out / "index.json").with_suffix(".tmp")
     tmp.write_text(json.dumps(index))
@@ -118,7 +112,7 @@ def main() -> None:
         prompts = load_prompts(prompts_path)
         cache_prompts(prompts, o, enc, args.batch)
         if args.verify:
-            verify(prompts, o, enc, args.verify)
+            verify(prompts, o, enc, args.verify, args.batch)
         write_index(prompts_path, o)
         n = enc.null("")
         torch.save({"emb": n.embeddings[:, : n.mask[0].sum()].to(torch.bfloat16).cpu(),
