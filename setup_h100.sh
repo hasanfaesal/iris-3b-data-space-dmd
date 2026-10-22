@@ -8,7 +8,7 @@ set -euo pipefail
 IRIS_COMMIT=13fcf6a4f7fcb36561eac3daa5ad30d0b0a1822e   # same commit NOTES.md was read from
 MODELS=/home/dev/models
 
-[ -d .venv ] || python3 -m venv .venv
+[ -d .venv ] || python3 -m venv --system-site-packages .venv  # sees the image's preinstalled torch
 # shellcheck disable=SC1091
 source .venv/bin/activate
 pip install -q --upgrade pip
