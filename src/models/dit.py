@@ -16,10 +16,12 @@ are bit-identical to the base teacher at the same t.
 
 Meta-device construction order (H100 scripts):
     with torch.device("meta"): model = DataSpaceIris(cfg.model)
-    model.to_empty(device=...)
-    model.reset_dataspace_init()
     missing, unexpected = model.load_state_dict(weights, strict=False, assign=True)
-    assert not missing and set(unexpected) == set(DataSpaceIris.BRANCH_KEYS)
+    assert set(missing) == set(DataSpaceIris.BRANCH_KEYS) and not unexpected  # base ckpt lacks the branches
+    for m in (model.x0_embedder, model.step_embeddings, model.fake_step_embeddings):
+        m.to_empty(device=...)
+    model.reset_dataspace_init()
+(see src/models/loading.py)
 
 The new parameters (x0_embedder.weight, step_embeddings.weight,
 fake_step_embeddings.weight) are NOT LoRA adapter slots: the trainer adds them

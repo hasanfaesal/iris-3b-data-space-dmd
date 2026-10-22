@@ -165,3 +165,25 @@ with torch.autocast("cuda", dtype=torch.bfloat16):
   zero-init identity gates).
 - Tiny fixture: base weights random at std 0.2 (not untrained 0.02) and adaln_zero_init=False so
   the adaLN gates are live and the text->image path (the only CFG-relevant path) has signal.
+## 13. Stage 5 decisions (prompts)
+
+- 40-60K was speculative. What matters is per-prompt generator reuse: ~2,400 updates x batch 16
+  = ~38K gen samples => 25K uniques => ~1.5 visits/prompt. Community collapse was LR-driven (5e-5),
+  not prompt-count-driven. No synthetic top-up: Qwen-Image-Flash (2606.03746) reports eval-shaped
+  category mixes can underperform simpler pools; strict category quotas dropped with it.
+- Training pool (~25K, `scripts/prepare_prompts.py` -> `data/prompts_train.jsonl`):
+  flux 10K (long captions), image-preferences ~6K, leffff text-rendering train 3K (~12% quoted
+  text), compbench train 2K (counting/spatial), pick-a-pic 4K (real phrasing, strict filter).
+  Parti dropped from training: it is the eval set (the community LoRA trained on it; we don't).
+- Filters: normalize -> exact dedup (train + vs eval) -> >=90% ASCII -> 5..256 Qwen tokens ->
+  residue/NSFW regex (lora tags, "in the style of", artstation, URLs, JSON escapes).
+  Near-dup (MinHash/embedding) skipped: exact-only; upgrade if reuse stats look bad.
+- Eval: 150 Parti stratified by category + 50 leffff test = 200 held-out prompts
+  (`data/prompts_eval.jsonl`), the 24 validation renders come from these.
+- Text handling DECIDED: cache Qwen embeddings offline (not online): encode once on the H100,
+  store unpadded [T,12,2560] bf16 + mask per prompt, pad per micro-batch, free Qwen before
+  training. ~6 MB/prompt at ~100 tokens => ~150 GB NVMe for 25K; fall back to online encoding
+  (Qwen bf16 ~8 GB) if NVMe is tight. Cache script belongs to the H100 stage, not stage 5.
+- Buckets (IMPLEMENT.md 3.1): (1024,1024),(768,1344),(896,1152),(1344,768),(1152,896) — all
+  16-aligned, ~1.0-1.03 MP. One bucket per GLOBAL batch (uniform draw); prompts carry no
+  intrinsic aspect, so bucket is a batch property: `BucketBatchSampler` yields (bucket, indices).

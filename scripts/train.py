@@ -1,0 +1,76 @@
+"""Train the data-space generator.
+
+    python scripts/train.py --tiny --out runs/smoke          # CPU smoke test, random tiny model
+    python scripts/train.py --out runs/main [--resume ckpt]  # H100, real Iris-3B (needs the embedding cache)
+"""
+
+import argparse
+import itertools
+import sys
+from pathlib import Path
+
+import torch
+
+sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[1] / "tests")]
+
+from src.engine.trainer import StdSentinel, TrainConfig, Trainer  # noqa: E402
+from src.models.lora import inject_lora  # noqa: E402
+
+
+def build_tiny():
+    from tiny import dataspace_iris, tiny_cond
+
+    model = dataspace_iris()
+
+    def batches(start):  # random stand-in for the cached-embedding loader
+        for t in itertools.count(start):
+            torch.manual_seed(1000 + t)
+            y, mask = tiny_cond(4)
+            yield {"y": y, "y_mask": mask, "hw": (16, 16)}
+
+    return model, tiny_cond(1), batches, "cpu", None
+
+
+def build_real(args):
+    """Real Iris-3B on CUDA, per the meta-build order in src/models/dit.py."""
+    from src.models.loading import load_dataspace_iris
+
+    model, _ = load_dataspace_iris("/home/dev/models/iris-3b")
+    model.train()  # Iris checkpoints activations only in train mode
+    model.activation_checkpointing = "full"
+    # Stage 5's cached-embedding loader (batches(start) -> iterator of the Trainer batch dict) and
+    # the cached null embedding are not wired yet.
+    raise NotImplementedError("hook up the Qwen embedding cache: need batches(start) and (null, null_mask)")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--tiny", action="store_true")
+    ap.add_argument("--out", required=True)
+    ap.add_argument("--resume")
+    ap.add_argument("--steps", type=int, default=2400, help="generator updates")
+    ap.add_argument("--min-std", type=float, default=0.2, help="sentinel floor; 0.7 * teacher pixel std")
+    args = ap.parse_args()
+
+    if args.tiny:
+        model, (null, null_mask), batches, device, autocast = build_tiny()
+        cfg = TrainConfig(warmup=2, fake_per_gen=2, micro_batch=2, num_steps=2, preview_every=2, ckpt_every=2)
+        args.steps = min(args.steps, 4)
+    else:
+        model, (null, null_mask), batches, device, autocast = build_real(args)
+        cfg = TrainConfig()
+    inject_lora(model, "gen", 128 if not args.tiny else 8)
+    inject_lora(model, "fake", 64 if not args.tiny else 4)
+
+    trainer = Trainer(model, null, null_mask, cfg, device=device, autocast_dtype=autocast, out_dir=args.out)
+    if args.resume:
+        trainer.load(args.resume)
+    stream = batches(trainer.turns)  # resume: skip the batches already consumed
+    fixed = next(batches(10**6))  # fixed preview batch
+    ok = trainer.fit(stream, args.steps, fixed_batch=fixed, sentinel=StdSentinel(args.min_std))
+    trainer.save(Path(args.out) / "checkpoints" / "last.pt")
+    sys.exit(0 if ok else 2)
+
+
+if __name__ == "__main__":
+    main()

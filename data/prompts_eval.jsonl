@@ -1,0 +1,200 @@
+{"prompt": "bond", "source": "parti", "category": "Abstract"}
+{"prompt": "element", "source": "parti", "category": "Abstract"}
+{"prompt": "molecule", "source": "parti", "category": "Abstract"}
+{"prompt": "life", "source": "parti", "category": "Abstract"}
+{"prompt": "protein", "source": "parti", "category": "Abstract"}
+{"prompt": "a shiba inu", "source": "parti", "category": "Animals"}
+{"prompt": "a snail", "source": "parti", "category": "Animals"}
+{"prompt": "brain coral", "source": "parti", "category": "Animals"}
+{"prompt": "a capybara", "source": "parti", "category": "Animals"}
+{"prompt": "a baby penguin", "source": "parti", "category": "Animals"}
+{"prompt": "a hedgehog", "source": "parti", "category": "Animals"}
+{"prompt": "a corgi", "source": "parti", "category": "Animals"}
+{"prompt": "a fox", "source": "parti", "category": "Animals"}
+{"prompt": "a panda", "source": "parti", "category": "Animals"}
+{"prompt": "a tiger", "source": "parti", "category": "Animals"}
+{"prompt": "an owl", "source": "parti", "category": "Animals"}
+{"prompt": "a cow", "source": "parti", "category": "Animals"}
+{"prompt": "a whale", "source": "parti", "category": "Animals"}
+{"prompt": "a cat", "source": "parti", "category": "Animals"}
+{"prompt": "a giraffe", "source": "parti", "category": "Animals"}
+{"prompt": "an eagle", "source": "parti", "category": "Animals"}
+{"prompt": "a kangaroo", "source": "parti", "category": "Animals"}
+{"prompt": "a fish", "source": "parti", "category": "Animals"}
+{"prompt": "a horse", "source": "parti", "category": "Animals"}
+{"prompt": "a pig", "source": "parti", "category": "Animals"}
+{"prompt": "a squirrel", "source": "parti", "category": "Animals"}
+{"prompt": "a bird", "source": "parti", "category": "Animals"}
+{"prompt": "a zebra", "source": "parti", "category": "Animals"}
+{"prompt": "a koi fish", "source": "parti", "category": "Animals"}
+{"prompt": "a dragon", "source": "parti", "category": "Animals"}
+{"prompt": "a chimpanzee", "source": "parti", "category": "Animals"}
+{"prompt": "a turkey", "source": "parti", "category": "Animals"}
+{"prompt": "a Tyrannosaurus Rex", "source": "parti", "category": "Animals"}
+{"prompt": "a Stegasaurus", "source": "parti", "category": "Animals"}
+{"prompt": "an espresso machine", "source": "parti", "category": "Artifacts"}
+{"prompt": "a propaganda poster", "source": "parti", "category": "Artifacts"}
+{"prompt": "a chair", "source": "parti", "category": "Artifacts"}
+{"prompt": "a robot", "source": "parti", "category": "Artifacts"}
+{"prompt": "robots", "source": "parti", "category": "Artifacts"}
+{"prompt": "a space elevator", "source": "parti", "category": "Artifacts"}
+{"prompt": "a clock", "source": "parti", "category": "Artifacts"}
+{"prompt": "a phone", "source": "parti", "category": "Artifacts"}
+{"prompt": "an armchair", "source": "parti", "category": "Artifacts"}
+{"prompt": "a teapot", "source": "parti", "category": "Artifacts"}
+{"prompt": "an illustration of a teapot", "source": "parti", "category": "Artifacts"}
+{"prompt": "a bench", "source": "parti", "category": "Artifacts"}
+{"prompt": "a laptop", "source": "parti", "category": "Artifacts"}
+{"prompt": "a t-shirt", "source": "parti", "category": "Artifacts"}
+{"prompt": "a bowl", "source": "parti", "category": "Artifacts"}
+{"prompt": "a flag", "source": "parti", "category": "Artifacts"}
+{"prompt": "a towel", "source": "parti", "category": "Artifacts"}
+{"prompt": "a wall", "source": "parti", "category": "Artifacts"}
+{"prompt": "a sword", "source": "parti", "category": "Artifacts"}
+{"prompt": "a statue", "source": "parti", "category": "Artifacts"}
+{"prompt": "a coffee mug", "source": "parti", "category": "Artifacts"}
+{"prompt": "a hammer", "source": "parti", "category": "Artifacts"}
+{"prompt": "a screwdriver", "source": "parti", "category": "Artifacts"}
+{"prompt": "a handsaw", "source": "parti", "category": "Artifacts"}
+{"prompt": "a power drill", "source": "parti", "category": "Artifacts"}
+{"prompt": "an iPhone case", "source": "parti", "category": "Artifacts"}
+{"prompt": "The Starry Night", "source": "parti", "category": "Arts"}
+{"prompt": "A solitary figure shrouded in mists peers up from the cobble stone street at the imposing and dark gothic buildings surrounding it. an old-fashioned lamp shines nearby. oil painting.", "source": "parti", "category": "Arts"}
+{"prompt": "A richly textured oil painting of a young badger delicately sniffing a yellow rose next to a tree trunk. A small waterfall can be seen in the background.", "source": "parti", "category": "Arts"}
+{"prompt": "A raccoon wearing formal clothes, wearing a tophat and holding a cane. The raccoon is holding a garbage bag. Oil painting in the style of abstract cubism.", "source": "parti", "category": "Arts"}
+{"prompt": "A raccoon wearing formal clothes, wearing a tophat and holding a cane. The raccoon is holding a garbage bag. Oil painting in the style of Egyptian tomp hieroglyphics.", "source": "parti", "category": "Arts"}
+{"prompt": "A raccoon wearing formal clothes, wearing a tophat and holding a cane. The raccoon is holding a garbage bag. Oil painting in the style of Hokusai.", "source": "parti", "category": "Arts"}
+{"prompt": "A bowl of Pho", "source": "parti", "category": "Food & Beverage"}
+{"prompt": "a cup of boba", "source": "parti", "category": "Food & Beverage"}
+{"prompt": "A picture of some food in the plate", "source": "parti", "category": "Food & Beverage"}
+{"prompt": "food", "source": "parti", "category": "Food & Beverage"}
+{"prompt": "a cocktail", "source": "parti", "category": "Food & Beverage"}
+{"prompt": "a margarita", "source": "parti", "category": "Food & Beverage"}
+{"prompt": "a roast turkey", "source": "parti", "category": "Food & Beverage"}
+{"prompt": "parallel lines", "source": "parti", "category": "Illustrations"}
+{"prompt": "concentric circles", "source": "parti", "category": "Illustrations"}
+{"prompt": "concurrent lines", "source": "parti", "category": "Illustrations"}
+{"prompt": "congruent triangles", "source": "parti", "category": "Illustrations"}
+{"prompt": "a red cube", "source": "parti", "category": "Illustrations"}
+{"prompt": "a circle", "source": "parti", "category": "Illustrations"}
+{"prompt": "a red circle", "source": "parti", "category": "Illustrations"}
+{"prompt": "a box", "source": "parti", "category": "Illustrations"}
+{"prompt": "a yellow box", "source": "parti", "category": "Illustrations"}
+{"prompt": "a red box", "source": "parti", "category": "Illustrations"}
+{"prompt": "a sphere", "source": "parti", "category": "Illustrations"}
+{"prompt": "a kitchen", "source": "parti", "category": "Indoor Scenes"}
+{"prompt": "a room", "source": "parti", "category": "Indoor Scenes"}
+{"prompt": "a wood cabin", "source": "parti", "category": "Indoor Scenes"}
+{"prompt": "a living room", "source": "parti", "category": "Indoor Scenes"}
+{"prompt": "a fall landscape", "source": "parti", "category": "Outdoor Scenes"}
+{"prompt": "a sunset", "source": "parti", "category": "Outdoor Scenes"}
+{"prompt": "a city", "source": "parti", "category": "Outdoor Scenes"}
+{"prompt": "a fog", "source": "parti", "category": "Outdoor Scenes"}
+{"prompt": "a store front", "source": "parti", "category": "Outdoor Scenes"}
+{"prompt": "a canal", "source": "parti", "category": "Outdoor Scenes"}
+{"prompt": "a street", "source": "parti", "category": "Outdoor Scenes"}
+{"prompt": "a house", "source": "parti", "category": "Outdoor Scenes"}
+{"prompt": "a city intersection", "source": "parti", "category": "Outdoor Scenes"}
+{"prompt": "a mountain", "source": "parti", "category": "Outdoor Scenes"}
+{"prompt": "waterfall", "source": "parti", "category": "Outdoor Scenes"}
+{"prompt": "a stone path", "source": "parti", "category": "Outdoor Scenes"}
+{"prompt": "Salvador Dal\u00ed", "source": "parti", "category": "People"}
+{"prompt": "a handpalm", "source": "parti", "category": "People"}
+{"prompt": "a team", "source": "parti", "category": "People"}
+{"prompt": "a child", "source": "parti", "category": "People"}
+{"prompt": "a man", "source": "parti", "category": "People"}
+{"prompt": "a woman", "source": "parti", "category": "People"}
+{"prompt": "a girl", "source": "parti", "category": "People"}
+{"prompt": "a person", "source": "parti", "category": "People"}
+{"prompt": "a boy", "source": "parti", "category": "People"}
+{"prompt": "a boy and a tiger", "source": "parti", "category": "People"}
+{"prompt": "a family", "source": "parti", "category": "People"}
+{"prompt": "a father and a son", "source": "parti", "category": "People"}
+{"prompt": "a portrait of an old man", "source": "parti", "category": "People"}
+{"prompt": "a portrait of young girl", "source": "parti", "category": "People"}
+{"prompt": "a scientist", "source": "parti", "category": "People"}
+{"prompt": "Greek statue of a man comforting a cat. The cat has a big head. The man looks angry.", "source": "parti", "category": "People"}
+{"prompt": "a walnut", "source": "parti", "category": "Produce & Plants"}
+{"prompt": "an orange", "source": "parti", "category": "Produce & Plants"}
+{"prompt": "lily pads", "source": "parti", "category": "Produce & Plants"}
+{"prompt": "a pumpkin", "source": "parti", "category": "Produce & Plants"}
+{"prompt": "an avocado", "source": "parti", "category": "Produce & Plants"}
+{"prompt": "an F1", "source": "parti", "category": "Vehicles"}
+{"prompt": "a hot air balloon", "source": "parti", "category": "Vehicles"}
+{"prompt": "a boat", "source": "parti", "category": "Vehicles"}
+{"prompt": "a train", "source": "parti", "category": "Vehicles"}
+{"prompt": "a submarine", "source": "parti", "category": "Vehicles"}
+{"prompt": "a car", "source": "parti", "category": "Vehicles"}
+{"prompt": "a pirate ship", "source": "parti", "category": "Vehicles"}
+{"prompt": "an F1 race car", "source": "parti", "category": "Vehicles"}
+{"prompt": "a taxi", "source": "parti", "category": "Vehicles"}
+{"prompt": "a rowboat", "source": "parti", "category": "Vehicles"}
+{"prompt": "U.S. 101", "source": "parti", "category": "World Knowledge"}
+{"prompt": "The Oriental Pearl", "source": "parti", "category": "World Knowledge"}
+{"prompt": "Ha Long Bay", "source": "parti", "category": "World Knowledge"}
+{"prompt": "A Vietnam map", "source": "parti", "category": "World Knowledge"}
+{"prompt": "a photo of san francisco's golden gate bridge", "source": "parti", "category": "World Knowledge"}
+{"prompt": "the Empire State Building", "source": "parti", "category": "World Knowledge"}
+{"prompt": "the Sydney Opera House", "source": "parti", "category": "World Knowledge"}
+{"prompt": "the grand canyon", "source": "parti", "category": "World Knowledge"}
+{"prompt": "The Statue of Liberty", "source": "parti", "category": "World Knowledge"}
+{"prompt": "the Eiffel Tower", "source": "parti", "category": "World Knowledge"}
+{"prompt": "the city of London", "source": "parti", "category": "World Knowledge"}
+{"prompt": "the International Space Station", "source": "parti", "category": "World Knowledge"}
+{"prompt": "a kachina doll", "source": "parti", "category": "World Knowledge"}
+{"prompt": "Times Square", "source": "parti", "category": "World Knowledge"}
+{"prompt": "the Great Wall", "source": "parti", "category": "World Knowledge"}
+{"prompt": "the Kremlin", "source": "parti", "category": "World Knowledge"}
+{"prompt": "The Alamo", "source": "parti", "category": "World Knowledge"}
+{"prompt": "the geyser Old Faithful", "source": "parti", "category": "World Knowledge"}
+{"prompt": "the Great Pyramid", "source": "parti", "category": "World Knowledge"}
+{"prompt": "Two pairs of crossed legs surround a small table with everyday items, with the phrase \"love is where my toes are\" written above, conveying a sense of intimacy and whimsy.", "source": "text_render", "category": "text"}
+{"prompt": "A man stands in front of a crowd holding flags with \"EUROPA W AKCJE\" written on them, on a city street with buildings in the background.", "source": "text_render", "category": "text"}
+{"prompt": "Two individuals sit closely together, their hands interlocked with \"love\" written on their palms in bold black marker, conveying unity and affection.", "source": "text_render", "category": "text"}
+{"prompt": "A person's hand holds a purple phone case with a white daisy and \"Daisy\" written on it, featuring a camera cutout and shopping cart icon.", "source": "text_render", "category": "text"}
+{"prompt": "A stylized graphic of a glass of beer with \"crafty beer girls\" written in a playful, handwritten font.", "source": "text_render", "category": "text"}
+{"prompt": "A hand holds a paper with \"Amazing Diaries\" written on it, set against a lush green backdrop.", "source": "text_render", "category": "text"}
+{"prompt": "Glass doors with \"LOSE\" written on them, closed with a green exit sign above, in a building with a tiled floor and brick wall.", "source": "text_render", "category": "text"}
+{"prompt": "A smiling, party-hatted face with \"Rolly Toys\" written above and below, in a vibrant, child-friendly graphic with a dynamic texture.", "source": "text_render", "category": "text"}
+{"prompt": "A woman holds a green arrow with \"MOTIVATION\" written on it, symbolizing direction towards success.", "source": "text_render", "category": "text"}
+{"prompt": "A stormtrooper stands in a dimly lit room with a red background, holding a white blaster rifle, with \"Beyond the Empire\" written in white capital letters.", "source": "text_render", "category": "text"}
+{"prompt": "A white ambulance with \"AMBULANCE\" written in red on its back is parked on a city street, with a red cross symbol indicating its medical emergency service function.", "source": "text_render", "category": "text"}
+{"prompt": "A red T-shirt features a stylized skeleton in a dynamic pose with \"BONES\" written above, showcased against a white background to highlight the vibrant design.", "source": "text_render", "category": "text"}
+{"prompt": "A watercolor painting of three blue buttons in a triangular formation, with a quote \"mothers are like buttons, they hold everything together\" written below.", "source": "text_render", "category": "text"}
+{"prompt": "A woman with tie-dye shirt and polka dot skirt stands against a green background with a white line and \"NO\" written on it.", "source": "text_render", "category": "text"}
+{"prompt": "A soft, plush blue pillow with \"love\" written in white cursive script, resembling feathers.", "source": "text_render", "category": "text"}
+{"prompt": "A cartoon character with red hair and distressed expression stands on a purple border, wearing a shirt with \"panic my panic\" written on it, representing a survivor's guide to panic attacks.", "source": "text_render", "category": "text"}
+{"prompt": "A notebook with \"web week resolutions\" written on it, placed against a blurred snowy scene, with a hint of WP Engine's promotion.", "source": "text_render", "category": "text"}
+{"prompt": "A mischievous cat with a surprised expression says \"You fool\" in a speech bubble, surrounded by a simple black and white speckled background.", "source": "text_render", "category": "text"}
+{"prompt": "A Rapunzel-themed birthday cake features a princess peeking out of a yellow-iced stone tower, with \"Happy Birthday Fangled\" written in icing.", "source": "text_render", "category": "text"}
+{"prompt": "Winnie the Pooh's quote \"Yesterday is history, tomorrow is a mystery, but today is a gift\" is written in playful font, accompanied by an illustration of the cheerful cartoon character.", "source": "text_render", "category": "text"}
+{"prompt": "A woman in a swimsuit with \"Ecuador\" written on it gently pets a coiled yellow snake, surrounded by a crowd in a festive atmosphere.", "source": "text_render", "category": "text"}
+{"prompt": "Colorful paper cupcake liners with floral patterns in various colors are stacked in a white frame, with \"100 Cupcake Cases\" written at the bottom.", "source": "text_render", "category": "text"}
+{"prompt": "A young girl with curly hair and glasses points upwards in front of a chalkboard-style background, with \"Articulation Intervention: How to Make it Work\" written above her.", "source": "text_render", "category": "text"}
+{"prompt": "A stylized shield logo featuring a beaver holding a maple branch, symbolizing Canada, with \"Canadian Pacific Railway\" written in bold white letters.", "source": "text_render", "category": "text"}
+{"prompt": "Five individuals, including one wearing a mask, gather around a red table with a \"Survey Says\" logo, interacting on a stage with a black curtain and red lights.", "source": "text_render", "category": "text"}
+{"prompt": "A woman stands in an industrial setting wearing a white hoodie with bold, colorful text repeating \"nobody says\".", "source": "text_render", "category": "text"}
+{"prompt": "A cartoon-like poster featuring two yellow and pink chickens on a soft blue background, with the artist's name \"Fran @franblam\" written in the frame.", "source": "text_render", "category": "text"}
+{"prompt": "A fork rests on a cork with \"sage\" written on it, tied with string, surrounded by dried flowers, serving as a bookmark or decorative piece.", "source": "text_render", "category": "text"}
+{"prompt": "A pixelated frog in sunglasses, surrounded by a digital purple grid, with \"memes\" written in pixel font, capturing internet culture's playful and humorous essence.", "source": "text_render", "category": "text"}
+{"prompt": "A smiling, cartoon-style duck stands on a circular base, with the word \"duck\" written below, in a simple black and white line drawing.", "source": "text_render", "category": "text"}
+{"prompt": "A couple shares a romantic kiss in a misty forest, with the quote \"I'd use my last breath to tell you I love you\" written in cursive above them.", "source": "text_render", "category": "text"}
+{"prompt": "A sheet of music titled \"Die A Happy Man\" for flute solo, written in black ink on a white background with musical notation.", "source": "text_render", "category": "text"}
+{"prompt": "A Jedi says \"I'm dead for a long time\" as a spaceship appears, disappears, and reappears in the desert sunset backdrop.", "source": "text_render", "category": "text"}
+{"prompt": "A cartoon character in a red Santa hat says \"Merry Trumpmas\" on a black hoodie with a watercolor background, with brand badges and sale tags.", "source": "text_render", "category": "text"}
+{"prompt": "A playful penguin plays guitar, set against a bold red background, with \"FRIDAY!\" written in dynamic letters, conveying excitement and anticipation.", "source": "text_render", "category": "text"}
+{"prompt": "A dandelion seed head floats against a bright blue sky, with the artist's name \"reality is my play thing\" written in cursive.", "source": "text_render", "category": "text"}
+{"prompt": "A colorful notebook cover features a playful fish illustration, with \"SEPTEMBER\" written in bold letters, surrounded by pens and a wooden surface.", "source": "text_render", "category": "text"}
+{"prompt": "A black house with a red heart roof, surrounded by floating hearts, with \"Happy Valentine's Day\" written below, symbolizing love and home.", "source": "text_render", "category": "text"}
+{"prompt": "A person's hand holds a black case with white earbuds, alongside three colored crystal cases and a notebook with \"SKILLS\" written on it.", "source": "text_render", "category": "text"}
+{"prompt": "A young boy in a yellow hat and green coat runs through a snowy winter scene with a clear blue sky and snow-covered trees, with \"Love for Animals\" written below.", "source": "text_render", "category": "text"}
+{"prompt": "A person stands outdoors, holding a card with \"no rules\" written in casual script, obscuring their face.", "source": "text_render", "category": "text"}
+{"prompt": "A cheerful cartoon pickle holds balloons and raises its arms in celebration, with the phrase \"party like a pickle\" written above.", "source": "text_render", "category": "text"}
+{"prompt": "A serene rural scene featuring a weathered barn, windmill, and rustic fence, with the phrase \"life is better on the farm\" written in elegant script.", "source": "text_render", "category": "text"}
+{"prompt": "A playful postcard illustration of a pink mixer with eggs and a blue button, surrounded by cheerful colors, with the phrase \"wish you were here\" written in cursive.", "source": "text_render", "category": "text"}
+{"prompt": "A dramatic photo of a face with a chain-link fence overlaying the eyes promotes \"The Odds Against Us: Urban Statistics,\" a theater production written and directed by Chris James.", "source": "text_render", "category": "text"}
+{"prompt": "A cartoonish hand gives a thumbs-up, surrounded by a green circle, with the word \"like\" written in playful, cursive ribbon-like font.", "source": "text_render", "category": "text"}
+{"prompt": "A beige straw hat with a black band and \"Dear summer\" written on it.", "source": "text_render", "category": "text"}
+{"prompt": "A man sits in front of foliage, holding his temples in apparent stress, with the text \"what to do when he says 'i need space'\".", "source": "text_render", "category": "text"}
+{"prompt": "A person's neck features a black ink lotus flower tattoo with the word \"Hope\" written in cursive, symbolizing hope and positivity.", "source": "text_render", "category": "text"}
+{"prompt": "A couple stands together, smiling, in front of a blackboard with the Finnish word \"N\u00e4ytt\u00e4\" written on it, surrounded by a floral arrangement in a casual indoor setting.", "source": "text_render", "category": "text"}
