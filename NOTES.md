@@ -191,3 +191,28 @@ with torch.autocast("cuda", dtype=torch.bfloat16):
 - Buckets (IMPLEMENT.md 3.1): (1024,1024),(768,1344),(896,1152),(1344,768),(1152,896) — all
   16-aligned, ~1.0-1.03 MP. One bucket per GLOBAL batch (uniform draw); prompts carry no
   intrinsic aspect, so bucket is a batch property: `BucketBatchSampler` yields (bucket, indices).
+
+## 14. Stage 7 results (measured on iris-dsdmd-h100-s7, 2026-10-22)
+
+- ALL GATES PASS: teacher parity worst rel L2 err 0.0139 (tol 0.05) at t=1000/600/200; the
+  bf16 base deviation is acceptable, no fp32 fallback needed. 20-step official-sampler run
+  from identical noise: PSNR 29.5 dB (info only). Zero-init identity bit-exact (max abs 0),
+  including teacher-unchanged-after-injection. No dead adapters after training turns.
+- F = 0.128 s per 1 MP teacher forward (batch 4) -> PLAN's 4:1 critic ratio stands
+  (band was <= 0.17 s).
+- Ramp (full activation checkpointing, train mode): mb=2 19.6 GB / mb=4 26.9 GB / mb=6
+  35.8 GB reserved. At the plan config (global 16 = mb 4 x 4): ~78 s per 4:1 update ->
+  ~2,400 gen updates in ~52 h; fits the credit window with margin.
+- Un-checkpointing is NOT free headroom at mb=4: --ac none, selective_layer every 2/3/4
+  all OOM near the 80 GB top (PiT pixel-head activations dominate). The plan's
+  "un-checkpoint trunk, keep PiT head checkpointed" recipe needs a per-stack policy (small
+  code change) -> Stage 8 lever, worth <= ~17% per PLAN.
+- mb=6 (global 24) measured 3.15 s/row vs mb=4's 4.85 s/row — a bigger micro-batch is
+  ~35% cheaper per sample, but changes the global-batch recipe; user's call, not taken.
+- transformers 5.20.2 loads Qwen3-VL fine through iris3b's encoder path (built and encoded
+  during verification); the laptop-downloaded torch 2.7.1/cu126 wheels were deliberately
+  NOT installed — node runs the image's torch 2.13.0+cu129.
+- Node egress facts: HF ~30-460 MB/s; PyPI-family + platform S3 contexts ~20 KB/s. Deps
+  installed from hasanfaesal/iris-wheels-temp via curl of wheel files (uv can't resolve
+  system-site torch; pip fallback can). vendor/iris-3b used via PYTHONPATH (no hatchling
+  in the wheels repo, so no pip -e).
