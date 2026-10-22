@@ -293,25 +293,26 @@ with torch.autocast("cuda", dtype=torch.bfloat16):
   - Result: extreme high-frequency texture collapse / TV-static noise across the entire image
     (pixel std = 0.4432, full-spectrum saturated RGB noise).
   - This is classic texture collapse, previously observed in community runs at high effective step sizes.
-- Root Cause Analysis:
-  1. Generator loss in `src/engine/losses.py:56`:
-     ```python
-     return (x0 * direction).flatten(1).sum(1).mean()
-     ```
-     Summing across all pixel dimensions on ~1 MP images (3 * 1024 * 1024 = 3,145,728 elements)
-     multiplied backpropagated gradients by ~3.15 million relative to mean pixel error.
-  2. Logged gradient norms throughout training were astronomical: `gnorm ≈ 3e+05` to `7e+05` (300,000–700,000!).
-  3. While `clip_grad_norm_(params, 1.0)` downscaled the vector length to 1.0, the optimizer update
-     direction was dominated by high-frequency spatial gradients, causing individual LoRA layers
-     (especially `t_embedder` and `adaln_img` cores) to violently over-steer into high-frequency static.
-  4. The preview images appeared blurry because EMA shadow weights were 93% frozen at zero, which
-     mathematically filtered the exploded high-frequency noise down into a low-contrast grayish haze
-     (pixel std 0.0701).
-- Prescriptions for Next Stage:
-  - Normalize generator loss across pixel dimensions (`.mean(1)` instead of `.sum(1)`), or adopt
-    the official Iris-Turbo TDM scale normalization `(v_pos - v_fake) / scale`.
-  - With normalized gradients, gradient norms will sit in normal numerical ranges (~0.1–10.0),
-    preventing LoRA weight saturation and texture collapse.
-  - Implement EMA warmup schedule (`decay = min(0.999, (1 + step) / (10 + step))`) so previews
-    faithfully track training dynamics from step 1.
-
+- Root cause: UNKNOWN. The first diagnosis (sum-reduced generator loss) was wrong; corrected below.
+  - Observed: the generator loss was `(x0 * direction).flatten(1).sum(1).mean()`, so logged
+    `gnorm` was 3e+05 to 7e+05 (about 3.15M times a mean-reduced loss on 3*1024*1024 elements).
+  - Why that is NOT the cause: the optimizer is `AdamW(betas=(0.0, 0.95))` with `clip=1.0`.
+    Adam divides by its own gradient RMS, so a constant loss scale cancels; with beta1=0 every
+    parameter moves ~lr per step regardless of scale. The clip fired on every step, rescaling
+    the gradient to norm 1, which Adam then normalized again. Per-element gradients were far
+    above Adam's eps either way.
+  - Mean-reduction (`(x0 * direction).mean()`, commit 8267ae7) is hygiene only: `gnorm` becomes
+    readable (~0.1) and the clip stops always firing. Do not expect it to fix the static.
+  - Preview blur at that run was a separate bug: EMA with fixed decay 0.999 absorbed only ~9.5%
+    of 100 updates from zero-init weights, so previews rendered a nearly un-updated model.
+    Fixed by the EMA warmup ramp `decay = min(0.999, (1 + step) / (10 + step))` (commit bebae70).
+- Open hypotheses for the raw-weight static (untested):
+  - `gen_lr` 2e-5 with beta1=0 / beta2=0.95 on zero-init adapters is an aggressive sign-like update
+    (NOTES 13: community collapse was LR-driven). Try 5e-6.
+  - Fake-critic warmup of only 20 updates: `v_fake` is then ~the plain conditional teacher, so
+    `v_pos - v_fake` is mostly the CFG term with no critic to correct it. Try warmup 100-200.
+  - Stage 8 trained on truncated text (section 17), not the real sampler's 300 tokens.
+  - If still unresolved: per-sample TDM normalization `(v_pos - v_fake) / scale` (changes weighting,
+    unlike a global scale).
+- Status: overfit_v2 (mean loss + EMA warmup + padded text, warmup 20) is the first test; judge it
+  on RAW-weight renders (the sentinel only watches EMA previews).
