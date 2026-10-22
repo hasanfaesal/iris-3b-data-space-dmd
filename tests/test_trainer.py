@@ -78,3 +78,13 @@ def test_fit_preview_sentinel_and_checkpoints(tmp_path):
     assert done is False and tr.gen_updates == 2
     assert len(list((tmp_path / "previews").rglob("*.png"))) == 8  # 4 rows x 2 previews
     assert (tmp_path / "checkpoints" / "gen000002.pt").exists()
+
+
+def test_every_r_trained_when_batch_has_fewer_microbatches_than_steps():
+    tr = make_trainer()
+    tr.cfg = TrainConfig(micro_batch=4, num_steps=4)  # 4 rows -> ONE micro-batch, 4 steps
+    seen = set()
+    for _ in range(4):
+        seen |= {r for r, *_ in tr._micro_batches(batch_at(0))}
+        tr.fake_updates += 1
+    assert seen == {0, 1, 2, 3}

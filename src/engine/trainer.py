@@ -143,7 +143,8 @@ class Trainer:
             z = torch.randn(b, 3, h, w, device=self.device)
             noise = torch.randn_like(z)
             sigma = sample_shifted_sigma(b, self.cfg.shift, self.device)
-            yield k % self.cfg.num_steps, y, mask, z, noise, sigma
+            # offset by turns so every r is trained even when a batch has fewer micro-batches than steps
+            yield (self.turns + k) % self.cfg.num_steps, y, mask, z, noise, sigma
 
     def _step(self, params, opt, adapter, loss_fn, batch) -> dict:
         chunks = list(self._micro_batches(batch))
