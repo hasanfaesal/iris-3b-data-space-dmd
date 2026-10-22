@@ -69,6 +69,9 @@ def pick(row: dict, *names: str) -> str | None:
     return None
 
 
+PROMPT_COLUMNS = ("prompt", "Prompt", "quality_prompt", "simplified_prompt", "text")
+
+
 def iter_prompts_parquet(hf_id: str, config: str, split: str):
     """Text-only rows from the datasets-server parquet conversion, reading only
     the prompt columns — image payloads never download (columnar ranged reads)."""
@@ -83,7 +86,7 @@ def iter_prompts_parquet(hf_id: str, config: str, split: str):
     for f in files:
         pf = pq.ParquetFile(fs.open(f))
         names = set(pf.schema_arrow.names)
-        cols = [c for c in ("prompt", "Prompt", "quality_prompt", "simplified_prompt", "category") if c in names]
+        cols = [c for c in PROMPT_COLUMNS if c in names] + (["category"] if "category" in names else [])
         for batch in pf.iter_batches(columns=cols, batch_size=1000):
             for row in batch.to_pylist():
                 p = pick(row, "prompt", "Prompt", "quality_prompt", "simplified_prompt")
@@ -93,26 +96,32 @@ def iter_prompts_parquet(hf_id: str, config: str, split: str):
 
 def iter_prompts(hf_id: str, config: str | None, split: str):
     """Yield (prompt, category) rows from a HF dataset, tolerant of schema variants."""
-    from datasets import load_dataset
+    from datasets import Dataset, DatasetDict, load_dataset
 
     try:
         ds = load_dataset(hf_id, config, split=split)
     except (ValueError, KeyError):
-        # config-per-category datasets: take the split of every config
+        # config-per-category datasets: take every config, but only train-like
+        # splits (val/val_seen/val_unseen/test are held out for eval).
         from datasets import get_dataset_config_names
 
         for cfg in get_dataset_config_names(hf_id):
             try:
-                part = load_dataset(hf_id, cfg, split=split)
+                part = load_dataset(hf_id, cfg)
             except (ValueError, KeyError):
                 continue
-            for row in part:
-                p = pick(row, "prompt", "Prompt", "simplified_prompt", "quality_prompt")
-                if p:
-                    yield p, row.get("category") or cfg
+            if isinstance(part, DatasetDict):
+                part = [s for name, s in part.items() if "val" not in name and "test" not in name]
+            if isinstance(part, Dataset):
+                part = [part]
+            for d in part:
+                for row in d:
+                    p = pick(row, *PROMPT_COLUMNS)
+                    if p:
+                        yield p, row.get("category") or cfg
         return
     for row in ds:
-        p = pick(row, "prompt", "Prompt", "quality_prompt", "simplified_prompt")
+        p = pick(row, *PROMPT_COLUMNS)
         if p:
             yield p, row.get("category")
 

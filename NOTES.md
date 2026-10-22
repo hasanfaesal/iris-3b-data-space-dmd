@@ -171,9 +171,13 @@ with torch.autocast("cuda", dtype=torch.bfloat16):
   = ~38K gen samples => 25K uniques => ~1.5 visits/prompt. Community collapse was LR-driven (5e-5),
   not prompt-count-driven. No synthetic top-up: Qwen-Image-Flash (2606.03746) reports eval-shaped
   category mixes can underperform simpler pools; strict category quotas dropped with it.
-- Training pool (~25K, `scripts/prepare_prompts.py` -> `data/prompts_train.jsonl`):
-  flux 10K (long captions), image-preferences ~6K, leffff text-rendering train 3K (~12% quoted
-  text), compbench train 2K (counting/spatial), pick-a-pic 4K (real phrasing, strict filter).
+- Training pool (actual 23,926, `scripts/prepare_prompts.py` -> `data/prompts_train.jsonl`):
+  flux 10,000 (long captions, of 16,912 passing), image-preferences 4,926, leffff text-rendering
+  train 3,000 (~15% quoted text after mix), compbench train 2,000 (counting/spatial),
+  pick-a-pic 4,000 (of 44,185 passing; strict filter dropped 14.7K). Median 28 words, max 195.
+  Parti dropped from training: it is the eval set (the community LoRA trained on it; we don't).
+  image_prefs is read via the datasets-server parquet endpoint with column projection (text-only;
+  the full repo ships multi-GB image payloads — do NOT `load_dataset` it on a RAM-limited machine).
   Parti dropped from training: it is the eval set (the community LoRA trained on it; we don't).
 - Filters: normalize -> exact dedup (train + vs eval) -> >=90% ASCII -> 5..256 Qwen tokens ->
   residue/NSFW regex (lora tags, "in the style of", artstation, URLs, JSON escapes).
@@ -182,7 +186,7 @@ with torch.autocast("cuda", dtype=torch.bfloat16):
   (`data/prompts_eval.jsonl`), the 24 validation renders come from these.
 - Text handling DECIDED: cache Qwen embeddings offline (not online): encode once on the H100,
   store unpadded [T,12,2560] bf16 + mask per prompt, pad per micro-batch, free Qwen before
-  training. ~6 MB/prompt at ~100 tokens => ~150 GB NVMe for 25K; fall back to online encoding
+  training. ~6 MB/prompt at ~100 tokens => ~140 GB NVMe for 24K; fall back to online encoding
   (Qwen bf16 ~8 GB) if NVMe is tight. Cache script belongs to the H100 stage, not stage 5.
 - Buckets (IMPLEMENT.md 3.1): (1024,1024),(768,1344),(896,1152),(1344,768),(1152,896) — all
   16-aligned, ~1.0-1.03 MP. One bucket per GLOBAL batch (uniform draw); prompts carry no
