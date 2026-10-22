@@ -196,8 +196,7 @@ def measure_F(model, y, mask, hw, device, batch=4, reps=3):
 def ramp(model, y, mask, null, null_mask, hw, device, args):
     """Real Trainer updates at growing micro-batch; records peak VRAM and step time."""
     model.train()
-    model.activation_checkpointing = args.ac
-    model.ac_selective_every = args.ac_every
+    model.set_activation_checkpointing(args.ac, args.ac_every)
     cfg = TrainConfig(micro_batch=args.mbs[0], num_steps=4, ema_decay=0.999)
     trainer = Trainer(model, null, null_mask, cfg, device=device, autocast_dtype=torch.bfloat16 if device.type == "cuda" else None)
     h, w = hw
@@ -261,9 +260,9 @@ def main():
     ap.add_argument("--sample-steps", type=int, default=20)
     ap.add_argument("--mbs", type=int, nargs="+", default=[2, 4, 6])
     ap.add_argument("--repeats", type=int, default=3, help="number of timed repeats per micro-batch")
-    ap.add_argument("--ac", default="full", choices=["none", "full", "selective_op", "selective_layer"])
+    ap.add_argument("--ac", default="full", choices=["none", "full", "selective_op", "selective_layer", "pixel_only"])
     ap.add_argument("--ac-every", type=int, default=2)
-    ap.add_argument("--ranks", type=int, nargs=2, default=[128, 64], metavar=("GEN", "FAKE"))
+    ap.add_argument("--ranks", type=int, nargs=2, default=[128, 128], metavar=("GEN", "FAKE"))
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)

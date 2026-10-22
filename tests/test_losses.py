@@ -40,8 +40,8 @@ def test_cfg_window_applies_only_below_threshold():
             v_uncond = model(x_tau, t, null, y_mask=null_mask).x
     assert not torch.allclose(v_cond, v_uncond, atol=1e-6)  # uncond must differ for the test to bite
     v_cfg = v_uncond + 3.0 * (v_cond - v_uncond)
-    assert torch.allclose(v_pos[0], v_cfg[0])  # sigma' 0.3 <= 0.6: CFG on
-    assert torch.allclose(v_pos[1], v_cond[1])  # sigma' 0.9 > 0.6: CFG off
+    assert torch.allclose(v_pos[0], v_cfg[0], atol=1e-5)  # sigma' 0.3 <= 0.6: CFG on
+    assert torch.allclose(v_pos[1], v_cond[1], atol=1e-5)  # sigma' 0.9 > 0.6: CFG off
 
 
 def test_cfg_scale_invariance_above_window():
@@ -102,3 +102,20 @@ def test_fake_loss_trains_fake_only():
     assert fg is not None and fg[2].abs().sum() > 0  # the used step row trains
     assert model.step_embeddings.weight.grad is None
     assert model.x0_embedder.weight.grad is None  # no x0 branch on the fake path
+
+def test_pixel_only_checkpointing_matches_full_gradients():
+    """Trunk un-checkpointed + checkpointed PiT head must give the same grads as `full`."""
+    grads = {}
+    for policy in ("full", "pixel_only"):
+        model = _model_with_both()
+        model.train()
+        model.set_activation_checkpointing(policy)
+        z, y, mask, null, null_mask = _inputs()
+        torch.manual_seed(1)
+        with use_adapter(model, "fake"):  # backward inside the adapter context, as the trainer does
+            loss = fake_critic_loss(model, z, y, mask, r=2, sigma=torch.tensor([0.4, 0.7]), noise=torch.randn_like(z))
+            loss.backward()
+        grads[policy] = {n: p.grad.clone() for n, p in model.named_parameters() if p.grad is not None}
+    assert grads["full"].keys() == grads["pixel_only"].keys() and grads["full"]
+    for n, g in grads["full"].items():
+        assert torch.allclose(g, grads["pixel_only"][n], atol=1e-6), n

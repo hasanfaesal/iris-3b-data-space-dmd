@@ -31,6 +31,7 @@ to the gen / fake optimizer param groups explicitly.
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 from iris3b.config import ModelConfig
 from iris3b.models.dit import IrisDiT, IrisOutput
@@ -59,6 +60,22 @@ class DataSpaceIris(IrisDiT):
         nn.init.zeros_(self.x0_embedder.weight)
         nn.init.zeros_(self.step_embeddings.weight)
         nn.init.zeros_(self.fake_step_embeddings.weight)
+
+    def set_activation_checkpointing(self, policy: str, every: int = 2) -> None:
+        """Iris policies plus ``pixel_only``: trunk keeps activations, only the PiT head recomputes.
+
+        Iris applies one policy to both stacks and the PiT pixel-head activations
+        dominate memory, so the trunk can be un-checkpointed only by checkpointing
+        the pixel blocks ourselves. Call once per model.
+        """
+        self.ac_selective_every = every
+        if policy != "pixel_only":
+            self.activation_checkpointing = policy
+            return
+        self.activation_checkpointing = "none"
+        for block in self.pixel_blocks:
+            fn = block.forward
+            block.forward = lambda *a, _fn=fn: checkpoint(_fn, *a, use_reentrant=False) if self.training else _fn(*a)
 
     # -- branch hooks ----------------------------------------------------------
     def _s_embedder_hook(self, _module, _inputs, output):

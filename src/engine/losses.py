@@ -25,15 +25,20 @@ def teacher_velocity_windowed(
 
     CFG where the shifted sigma' <= cfg_window; plain conditional velocity
     above it (prevents color blooming at high noise). Cond and uncond passes
-    run sequentially to halve peak memory vs a doubled batch.
+    run sequentially to halve peak memory vs a doubled batch. The uncond pass
+    runs only on the in-window rows (~4% of rows under Beta(2.5, 1)); the rest
+    would be discarded.
     """
     t_model = sigma * MODEL_TIME_SCALE
     with torch.no_grad():
         with use_adapter(model, "off"):
-            v_cond = model(x_tau, t_model, y, y_mask=y_mask).x.float()
-            v_uncond = model(x_tau, t_model, null, y_mask=null_mask).x.float()
-        v_cfg = v_uncond + cfg_scale * (v_cond - v_uncond)
-    return torch.where(_per_sample(sigma, x_tau) <= cfg_window, v_cfg, v_cond)
+            v = model(x_tau, t_model, y, y_mask=y_mask).x.float()
+            idx = (sigma <= cfg_window).nonzero().flatten()
+            if idx.numel():
+                v_cond = v[idx]
+                v_uncond = model(x_tau[idx], t_model[idx], null[idx], y_mask=null_mask[idx]).x.float()
+                v[idx] = v_uncond + cfg_scale * (v_cond - v_uncond)
+    return v
 
 
 def dmd_generator_loss(

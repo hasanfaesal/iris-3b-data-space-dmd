@@ -66,7 +66,7 @@ def test_save_resume_reproduces_next_steps_exactly(tmp_path):
         b.turn(batch_at(t))
 
     sa, sb = ref.state_dict(), b.state_dict()
-    for group in ("gen", "fake", "ema"):
+    for group in ("gen", "fake", "ema", "ema_slow"):
         assert all(torch.equal(sa[group][n], sb[group][n]) for n in sa[group]), group
 
 

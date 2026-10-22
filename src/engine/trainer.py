@@ -35,6 +35,7 @@ class TrainConfig:
     weight_decay: float = 0.0
     clip: float = 1.0
     ema_decay: float = 0.999
+    ema_slow_decay: float = 0.9999  # second, slower shadow (checkpointed; not previewed)
     fake_per_gen: int = 4
     warmup: int = 200  # fake-only turns before the first generator update
     micro_batch: int = 4  # global batch = len(batch) rows, split into micro-batches
@@ -116,6 +117,7 @@ class Trainer:
         self.gen_opt = torch.optim.AdamW(self.gen_params.values(), lr=cfg.gen_lr, **opt)
         self.fake_opt = torch.optim.AdamW(self.fake_params.values(), lr=cfg.fake_lr, **opt)
         self.ema = EMA(self.gen_params, cfg.ema_decay)
+        self.ema_slow = EMA(self.gen_params, cfg.ema_slow_decay)
         self.gen_updates = 0
         self.fake_updates = 0
 
@@ -174,6 +176,7 @@ class Trainer:
 
         stats = self._step(self.gen_params, self.gen_opt, "gen", loss_fn, batch)
         self.ema.update(self.gen_updates)
+        self.ema_slow.update(self.gen_updates)
         self.gen_updates += 1
         return stats
 
@@ -227,6 +230,7 @@ class Trainer:
         return {
             "gen": cpu(self.gen_params), "fake": cpu(self.fake_params),
             "ema": {n: t.cpu() for n, t in self.ema.shadow.items()},
+            "ema_slow": {n: t.cpu() for n, t in self.ema_slow.shadow.items()},
             "gen_opt": self.gen_opt.state_dict(), "fake_opt": self.fake_opt.state_dict(),
             "gen_updates": self.gen_updates, "fake_updates": self.fake_updates, "rng": rng,
         }
@@ -239,6 +243,8 @@ class Trainer:
                 p.copy_(state["fake"][n])
             for n, t in self.ema.shadow.items():
                 t.copy_(state["ema"][n])
+            for n, t in self.ema_slow.shadow.items():
+                t.copy_(state.get("ema_slow", state["ema"])[n])  # older checkpoints: seed from the fast EMA
         self.gen_opt.load_state_dict(state["gen_opt"])
         self.fake_opt.load_state_dict(state["fake_opt"])
         self.gen_updates, self.fake_updates = state["gen_updates"], state["fake_updates"]

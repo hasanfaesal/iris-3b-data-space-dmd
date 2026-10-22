@@ -42,7 +42,7 @@ def build_real(args):
     null, null_mask = load_null(args.cache)
     model, _ = load_dataspace_iris("/home/dev/models/iris-3b")
     model.train()  # Iris checkpoints activations only in train mode
-    model.activation_checkpointing = "full"
+    model.set_activation_checkpointing(args.ac, args.ac_every)
 
     from src.data.prompt_dataset import BucketBatchSampler
 
@@ -71,6 +71,8 @@ def main():
     ap.add_argument("--warmup", type=int, default=200, help="fake warmup updates")
     ap.add_argument("--fake-per-gen", type=int, default=4, help="critic updates per generator update")
     ap.add_argument("--overfit", type=int, default=0, help="overfit on first N prompts in cache")
+    ap.add_argument("--ac", default="pixel_only", choices=["none", "full", "selective_op", "selective_layer", "pixel_only"])
+    ap.add_argument("--ac-every", type=int, default=2)
     ap.add_argument("--min-std", type=float, default=0.2, help="sentinel floor; 0.7 * teacher pixel std")
     args = ap.parse_args()
 
@@ -95,7 +97,7 @@ def main():
             ckpt_every=args.ckpt_every,
         )
     inject_lora(model, "gen", 128 if not args.tiny else 8)
-    inject_lora(model, "fake", 64 if not args.tiny else 4)
+    inject_lora(model, "fake", 128 if not args.tiny else 4)
 
     trainer = Trainer(model, null, null_mask, cfg, device=device, autocast_dtype=autocast, out_dir=args.out)
     if args.resume:
