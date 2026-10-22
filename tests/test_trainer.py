@@ -4,7 +4,7 @@ import itertools
 
 import torch
 
-from src.engine.trainer import StdSentinel, TrainConfig, Trainer
+from src.engine.trainer import EMA, StdSentinel, TrainConfig, Trainer
 from src.models.lora import inject_lora, lora_layers
 from tiny import dataspace_iris, tiny_cond
 
@@ -88,3 +88,15 @@ def test_every_r_trained_when_batch_has_fewer_microbatches_than_steps():
         seen |= {r for r, *_ in tr._micro_batches(batch_at(0))}
         tr.fake_updates += 1
     assert seen == {0, 1, 2, 3}
+
+
+def test_ema_warmup_tracks_early_updates():
+    """Step 0 copies the live weight (decay 0.1 at most); late steps cap at cfg decay."""
+    p = {"w": torch.nn.Parameter(torch.zeros(1))}
+    ema = EMA(p, 0.999)
+    p["w"].data.fill_(1.0)
+    ema.update(0)
+    assert ema.shadow["w"].item() > 0.85  # fixed 0.999 would give 0.001
+    ema.shadow["w"].zero_()
+    ema.update(10**6)
+    assert abs(ema.shadow["w"].item() - 0.001) < 1e-6

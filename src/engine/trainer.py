@@ -54,9 +54,11 @@ class EMA:
         self.shadow = {n: p.detach().clone() for n, p in params.items()}
 
     @torch.no_grad()
-    def update(self) -> None:
+    def update(self, step: int) -> None:
+        # warmup ramp: zero-init weights would otherwise stay ~(1-decay^step) absorbed early on
+        decay = min(self.decay, (1 + step) / (10 + step))
         for n, p in self.params.items():
-            self.shadow[n].lerp_(p.detach(), 1 - self.decay)
+            self.shadow[n].lerp_(p.detach(), 1 - decay)
 
     @contextlib.contextmanager
     def applied(self):
@@ -171,7 +173,7 @@ class Trainer:
             return generator_loss(self.model, z, y, mask, r, sigma, noise, n, nm, c.cfg_scale, c.cfg_window)
 
         stats = self._step(self.gen_params, self.gen_opt, "gen", loss_fn, batch)
-        self.ema.update()
+        self.ema.update(self.gen_updates)
         self.gen_updates += 1
         return stats
 
