@@ -12,12 +12,12 @@ cd /home/dev/h100-2
     --out "$OUT_DIR" \
     --cache /home/dev/cache \
     --overfit 16 \
-    --steps 60 \
+    --steps 100 \
     --warmup 200 \
     --ac full \
-    --min-std 0.04 \
+    --min-std 0.0 \
     --max-std 0.40 \
-    --preview-every 10,20,40,60 \
+    --preview-every 10,20,40,60,80,100 \
     --ckpt-every 20 \
     >> "$LOG_FILE" 2>&1
 
