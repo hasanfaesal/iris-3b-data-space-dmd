@@ -234,21 +234,31 @@ with torch.autocast("cuda", dtype=torch.bfloat16):
 
 ## 16. Visual Analysis & EMA Lag Diagnostic on Early Previews (2026-10-22)
 
-- Inspection of `step000025` and `step000050` (`04.png`):
+- Inspection of `step000025`, `step000050`, `step000075`, and `step000100` (`04.png`):
   - Previews appear as smooth, low-contrast washed-out fields (mean ~171, std ~0.070) with
     visible 16x16 patch checkerboard artifacts and identical gross shapes ("Y" contour).
-  - Step 25 and Step 50 are visually indistinguishable.
-- Root Cause Identified:
-  1. `preview()` strictly samples under `self.ema.applied()`.
-  2. With `ema_decay = 0.999`, after only 50 updates the EMA shadow weights have incorporated
-     only `1 - 0.999^50 ≈ 4.9%` of the generator updates. The weights used for rendering
-     are still ~95% frozen at the initial zero-LoRA state.
-  3. Consequently, the preview is effectively rendering the bare base teacher's unconditioned
-     4-step rollout from zero init, rather than the student's active weights.
-- Takeaway / Diagnostic Plan:
-  - In short smoke tests (<= 100 steps), evaluate previews using raw generator weights (or
-    use an EMA warmup schedule `decay = min(0.999, (1 + step) / (10 + step))`).
-  - Compare raw checkpoint weights vs EMA weights once step 100 finishes.
+  - All four preview checkpoints (step 25, 50, 75, 100) are virtually identical.
+- Root Cause Verification (Measured directly from `gen000100.pt` checkpoint):
+  1. `use_adapter(model, "gen")` IS active in `rollout_dataspace` (`src/engine/rollout.py:25`).
+  2. The issue is mathematical attenuation from zero-initialization combined with un-warmed `ema_decay = 0.999`.
+  3. All new branches and LoRA `up` projections started at exact 0.0. During training, the active generator
+     learned aggressively:
+     - Active `x0_embedder.weight` norm: 0.3527
+     - Active `step_embeddings.weight` norm: 0.0336
+     - Active `lora_up` mean norm: 0.1741
+  4. Under fixed `decay = 0.999`, after 100 updates the shadow weights track `1 - 0.999^100 ≈ 0.0952` (~9.5%).
+     Measured ratios in `gen000100.pt`:
+     - EMA `x0_embedder.weight`: 0.0243 (only 6.88% of active)
+     - EMA `step_embeddings.weight`: 0.0025 (only 7.32% of active)
+     - EMA `lora_up`: 0.0121 (only 6.93% of active)
+  5. Because LoRA adaptation requires both up and down projections, and data-space iteration feeds through
+     `x0_embedder`, the EMA preview weights were >93% frozen at zero init. The preview function was therefore
+     rendering what was effectively an unconditioned, zero-LoRA 1-step teacher forward across all 100 steps.
+- Solutions to Carry Forward:
+  - For short runs / smoke tests (<= 200 steps): preview using active weights, or warm EMA via
+    `decay = min(0.999, (1 + step) / (10 + step))`.
+  - For production runs (2,400 steps): EMA will reach `1 - 0.999^2400 ≈ 90.9%`, but an EMA warmup ramp
+    is strongly recommended to avoid early checkpoint preview degradation.
 
 
 ## 17. Text padding fix: cache and null padded to 300 (2026-10-22)
