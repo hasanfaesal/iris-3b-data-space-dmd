@@ -213,18 +213,26 @@ def ramp(model, y, mask, null, null_mask, hw, device, args):
             sync(device)
             if device.type == "cuda":
                 torch.cuda.reset_peak_memory_stats(device)
-            t0 = time.perf_counter()
-            trainer.fake_update(batch)
-            sync(device)
-            t1 = time.perf_counter()
-            trainer.gen_update(batch)
-            sync(device)
-            t2 = time.perf_counter()
-            fake_ps, gen_ps = (t1 - t0) / rows, (t2 - t1) / rows
+            repeats = getattr(args, "repeats", 3)
+            t_fake, t_gen = 0.0, 0.0
+            for _ in range(repeats):
+                t0 = time.perf_counter()
+                trainer.fake_update(batch)
+                sync(device)
+                t1 = time.perf_counter()
+                trainer.gen_update(batch)
+                sync(device)
+                t2 = time.perf_counter()
+                t_fake += (t1 - t0)
+                t_gen += (t2 - t1)
+            fake_s, gen_s = t_fake / repeats, t_gen / repeats
+            fake_ps, gen_ps = fake_s / rows, gen_s / rows
             row.update(
                 peak_allocated_gb=torch.cuda.max_memory_allocated(device) / 2**30 if device.type == "cuda" else 0.0,
                 peak_reserved_gb=torch.cuda.max_memory_reserved(device) / 2**30 if device.type == "cuda" else 0.0,
-                fake_s=t1 - t0, gen_s=t2 - t1,
+                fake_s=fake_s, gen_s=gen_s,
+                fake_ps=fake_ps, gen_ps=gen_ps,
+                repeats=repeats,
                 # one generator update at ratio 4:1 for a global batch of 16
                 projected_update_s=16 * (4 * fake_ps + gen_ps),
             )
@@ -252,6 +260,7 @@ def main():
     ap.add_argument("--tol", type=float, default=0.05, help="max relative L2 velocity error, bf16 vs fp32 teacher")
     ap.add_argument("--sample-steps", type=int, default=20)
     ap.add_argument("--mbs", type=int, nargs="+", default=[2, 4, 6])
+    ap.add_argument("--repeats", type=int, default=3, help="number of timed repeats per micro-batch")
     ap.add_argument("--ac", default="full", choices=["none", "full", "selective_op", "selective_layer"])
     ap.add_argument("--ac-every", type=int, default=2)
     ap.add_argument("--ranks", type=int, nargs=2, default=[128, 64], metavar=("GEN", "FAKE"))
