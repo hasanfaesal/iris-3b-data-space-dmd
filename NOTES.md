@@ -339,3 +339,43 @@ no dead adapters PASS. Teacher 1 MP forward F = 0.128 s -> 4:1 critic ratio stan
 - Open: confirm the ramp used 300-token padded text (reserved 26.1 GB at mb 4 is slightly below the
   26.9 GB from section 14, which padding should have raised). If it used short text, re-time before budgeting.
 - mb 16 not run; VRAM fragmentation risk near 80 GB is unmeasured.
+
+## 20. Run length, budget and go/no-go (2026-10-23)
+
+Run length (precedent-based, not a fixed target):
+- MOSS 4-step adapter: usable at ~450 gen updates; quality degraded from 500 to 800 (NaN ~841). Release was the 500-it EMA.
+- Community LoRA: collapsed to texture around 1,500–1,750 updates. Its recommended release was 1,500 updates plus 1,000 more at half the LR.
+- Iris Turbo: 2,100 updates.
+- Plan: checkpoint every 250 updates and pick the best one from validation renders, rather than running to a fixed count (PLAN's 2,400 is a ceiling, not a target).
+
+Budget (live `get_billing` 2026-10-23 00:50 UTC+5):
+- Available $351.18; burn $5.04/hr at list price; credit expires 2026-10-26 11:53 UTC.
+- Wall-clock to expiry ~88 h, but money runs out first at list price (~70 h).
+- Estimate: ~7 h prep + ~45 h main run (~1,800–2,000 updates at ~77–85 s) + ~4 h eval/export + a few h buffer ≈ 60 h node time.
+- Friday–Sunday discounts (Pacific) per AUTORESEARCH_H100_GUIDE.md: 33% Fri, 20% Sat–Sun. Not yet confirmed on billing; re-check `get_billing` on Friday.
+- Cost with discounts if run continuously from Thu 12:17 Pacific: ~$238. Leaves ~$113 for a second project (~22–33 h depending on rate). Without discounts: ~$302.
+- Node idle grace (15 min) and `iris-dsdmd-h100-s7` (running now at $5.04/hr) count against this.
+
+Go/no-go:
+- The real test is the first 250 updates (~5–6 h). The loss scale is not the expected cure.
+- Correction to the earlier reasoning: Adam is scale-invariant only while per-element gradient RMS is much larger than eps. torch's default eps is 1e-8; per-element grads ~1e-7 give a denominator ~1.1e-7, so eps damps the step by ~10%, not "mostly." The mean-reduction change is hygiene (gnorm readable, clip stops always firing). It does not fix the static.
+- If the static recurs at 250 with mean-loss + EMA warmup + padded text: stop, then test gen_lr 5e-6 and warmup 100–200 (see §18 open hypotheses) before a long run.
+
+## 21. Teacher Baseline Measurement & Critic Warmup Diagnostic (2026-10-23)
+
+- Motivation:
+  - Before tweaking training hyperparameters or running another 100-update loop, we must determine whether the underlying representations and conditioning pipeline are sound.
+  - Test hypothesis:
+    1. If the official 20-step sampler with adapters off produces mush from the cached 300-token embeddings, then the embeddings, text padding, or conditioning pipeline are broken.
+    2. If the teacher is razor-sharp, then the representations are pristine, and the blurry/silhouette output is purely a student-objective / critic warmup failure ($v_{\text{fake}} \approx 0 \implies v_{\text{pos}} - v_{\text{fake}} \approx v_{\text{pos}}$, driving the generator toward an unconditioned diffuse average).
+- Experiment:
+  - Rendered prompts 02 and 04 from `/home/dev/cache` (padded to 300 tokens) using the official `FlowDPMSolver` (20 steps, order=2, cfg=4.0, shift=3.0, 1024x1024, adapters off, seed=0).
+- Results:
+  - Prompt 02: `pixel_std = 0.6155`. Razor-sharp gnarled tree in desert with glowing hollow at sunset.
+  - Prompt 04: `pixel_std = 0.6094`. Razor-sharp jewel-encrusted phoenix diving underwater into luminous fish.
+  - Direct comparison with preview images: the "Y" shape and murky blue/beige composition in earlier student previews (e.g. `04.png`) match the exact gross structure and color distribution of Prompt 04's phoenix.
+- Conclusion:
+  - The cache, text tokenization (padded to 300), null conditioning, and DiT model evaluate with pristine fidelity. The foundation is solid.
+  - The diffuse silhouette behavior is confirmed to be an under-warmed critic ($v_{\text{fake}}$). With `warmup=20`, the critic has not learned the generator's distribution, making the update direction dominated by the teacher's CFG expectation.
+  - Next training test: set `--warmup 200` to allow the critic to establish an accurate boundary before student updates begin.
+
