@@ -33,14 +33,29 @@ def build_tiny():
 
 def build_real(args):
     """Real Iris-3B on CUDA, per the meta-build order in src/models/dit.py."""
+    if not args.cache:
+        raise SystemExit("--cache <dir> is required for real runs (cache_embeddings.py output)")
+    from src.data.embed_cache import EmbedCache, load_null
     from src.models.loading import load_dataspace_iris
 
+    cache = EmbedCache(args.cache)
+    null, null_mask = load_null(args.cache)
     model, _ = load_dataspace_iris("/home/dev/models/iris-3b")
     model.train()  # Iris checkpoints activations only in train mode
     model.activation_checkpointing = "full"
-    # Stage 5's cached-embedding loader (batches(start) -> iterator of the Trainer batch dict) and
-    # the cached null embedding are not wired yet.
-    raise NotImplementedError("hook up the Qwen embedding cache: need batches(start) and (null, null_mask)")
+
+    from src.data.prompt_dataset import BucketBatchSampler
+
+    def batches(start):  # infinite stream: epoch-cycling shuffles (resume: skip `start` batches)
+        skipped, epoch = start, 0
+        while True:
+            for k, b in enumerate(BucketBatchSampler(cache.n, seed=epoch)):
+                if k >= skipped:
+                    y, mask = cache.get(b.indices)
+                    yield {"y": y, "y_mask": mask, "hw": b.bucket_hw}
+            skipped, epoch = 0, epoch + 1
+
+    return model, (null, null_mask), batches, "cuda", torch.bfloat16
 
 
 def main():
@@ -48,6 +63,8 @@ def main():
     ap.add_argument("--tiny", action="store_true")
     ap.add_argument("--out", required=True)
     ap.add_argument("--resume")
+    ap.add_argument("--checkpoint", default="/home/dev/models/iris-3b")
+    ap.add_argument("--cache", default=None, help="embedding cache dir from cache_embeddings.py")
     ap.add_argument("--steps", type=int, default=2400, help="generator updates")
     ap.add_argument("--min-std", type=float, default=0.2, help="sentinel floor; 0.7 * teacher pixel std")
     args = ap.parse_args()
