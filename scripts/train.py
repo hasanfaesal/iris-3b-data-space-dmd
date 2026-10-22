@@ -66,7 +66,7 @@ def main():
     ap.add_argument("--checkpoint", default="/home/dev/models/iris-3b")
     ap.add_argument("--cache", default=None, help="embedding cache dir from cache_embeddings.py")
     ap.add_argument("--steps", type=int, default=2400, help="generator updates")
-    ap.add_argument("--preview-every", type=int, default=250, help="preview frequency in gen updates (0 to disable)")
+    ap.add_argument("--preview-every", default="250", help="preview frequency in gen updates, or comma-separated steps (e.g. 10,20,40,60)")
     ap.add_argument("--ckpt-every", type=int, default=250, help="checkpoint frequency in gen updates")
     ap.add_argument("--warmup", type=int, default=200, help="fake warmup updates")
     ap.add_argument("--fake-per-gen", type=int, default=4, help="critic updates per generator update")
@@ -79,7 +79,14 @@ def main():
     )
     ap.add_argument("--ac-every", type=int, default=2)
     ap.add_argument("--min-std", type=float, default=0.2, help="sentinel floor; 0.7 * teacher pixel std")
+    ap.add_argument("--max-std", type=float, default=0.4, help="sentinel ceiling; abort on static explosion")
     args = ap.parse_args()
+
+    preview_every = (
+        {int(x) for x in args.preview_every.split(",")}
+        if "," in str(args.preview_every)
+        else int(args.preview_every)
+    )
 
     if args.tiny:
         model, (null, null_mask), batches, device, autocast = build_tiny()
@@ -98,7 +105,7 @@ def main():
         cfg = TrainConfig(
             warmup=args.warmup,
             fake_per_gen=args.fake_per_gen,
-            preview_every=args.preview_every,
+            preview_every=preview_every,
             ckpt_every=args.ckpt_every,
         )
     inject_lora(model, "gen", 128 if not args.tiny else 8)
@@ -109,7 +116,7 @@ def main():
         trainer.load(args.resume)
     stream = batches(trainer.turns)  # resume: skip the batches already consumed
     fixed = next(batches(10**6))  # fixed preview batch
-    ok = trainer.fit(stream, args.steps, fixed_batch=fixed, sentinel=StdSentinel(args.min_std))
+    ok = trainer.fit(stream, args.steps, fixed_batch=fixed, sentinel=StdSentinel(args.min_std, max_std=args.max_std, patience=1))
     trainer.save(Path(args.out) / "checkpoints" / "last.pt")
     sys.exit(0 if ok else 2)
 

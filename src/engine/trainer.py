@@ -43,7 +43,7 @@ class TrainConfig:
     shift: float = 4.0
     cfg_scale: float = 3.0
     cfg_window: float = 0.6
-    preview_every: int = 250  # generator updates; 0 disables
+    preview_every: int | list[int] | set[int] = 250  # generator updates; 0 disables, or list of steps
     ckpt_every: int = 250  # generator updates; 0 disables
 
 
@@ -76,17 +76,16 @@ class EMA:
 
 
 class StdSentinel:
-    """Collapse guard: trips after ``patience`` consecutive previews below ``min_std``.
+    """Collapse guard: trips if pixel std collapses (< min_std) or explodes to static (> max_std)."""
 
-    Pass min_std = 0.7 * teacher's per-image pixel std (PLAN.md). Turbo's
-    absolute rule of thumb is 0.2 on [0,1] pixels.
-    """
-
-    def __init__(self, min_std: float = 0.2, patience: int = 2):
-        self.min_std, self.patience, self.bad = min_std, patience, 0
+    def __init__(self, min_std: float = 0.2, max_std: float = 0.4, patience: int = 2):
+        self.min_std, self.max_std, self.patience, self.bad = min_std, max_std, patience, 0
 
     def update(self, std: float) -> bool:
-        self.bad = self.bad + 1 if std < self.min_std else 0
+        if std < self.min_std or std > self.max_std:
+            self.bad += 1
+        else:
+            self.bad = 0
         return self.bad >= self.patience
 
 
@@ -120,6 +119,11 @@ class Trainer:
         self.ema_slow = EMA(self.gen_params, cfg.ema_slow_decay)
         self.gen_updates = 0
         self.fake_updates = 0
+        self._initial_lora_up = {
+            n: p.detach().clone().norm().item()
+            for n, p in self.gen_params.items()
+            if "lora_up" in n
+        }
 
     # -- schedule ------------------------------------------------------------------
     @property
@@ -154,30 +158,50 @@ class Trainer:
         chunks = list(self._micro_batches(batch))
         opt.zero_grad(set_to_none=True)
         total = 0.0
+        extra_metrics = {}
         for r, y, mask, z, noise, sigma in chunks:
             # backward inside the adapter context: checkpoint recompute must see the live adapter
             with use_adapter(self.model, adapter):
                 with self._autocast():
-                    loss = loss_fn(r, y, mask, z, noise, sigma)
+                    res = loss_fn(r, y, mask, z, noise, sigma)
+                    if isinstance(res, tuple):
+                        loss, aux = res
+                        for k, v in aux.items():
+                            extra_metrics[k] = extra_metrics.get(k, 0.0) + v / len(chunks)
+                    else:
+                        loss = res
                 if not torch.isfinite(loss):
                     raise FloatingPointError(f"non-finite {adapter} loss at turn {self.turns}")
                 (loss / len(chunks)).backward()
             total += loss.item() / len(chunks)
         grad_norm = torch.nn.utils.clip_grad_norm_(list(params.values()), self.cfg.clip)
         opt.step()
-        return {"loss": total, "grad_norm": grad_norm.item()}
+        out = {"loss": total, "grad_norm": grad_norm.item()}
+        out.update(extra_metrics)
+        return out
 
     def gen_update(self, batch) -> dict:
         def loss_fn(r, y, mask, z, noise, sigma):
             n = self.null.expand(y.shape[0], *self.null.shape[1:])
             nm = self.null_mask.expand(y.shape[0], *self.null_mask.shape[1:])
             c = self.cfg
-            return generator_loss(self.model, z, y, mask, r, sigma, noise, n, nm, c.cfg_scale, c.cfg_window)
+            return generator_loss(self.model, z, y, mask, r, sigma, noise, n, nm, c.cfg_scale, c.cfg_window, return_aux=True)
 
         stats = self._step(self.gen_params, self.gen_opt, "gen", loss_fn, batch)
         self.ema.update(self.gen_updates)
         self.ema_slow.update(self.gen_updates)
         self.gen_updates += 1
+
+        # Relative lora_up growth
+        if self._initial_lora_up:
+            growths = []
+            for n, init_norm in self._initial_lora_up.items():
+                cur_norm = self.gen_params[n].detach().norm().item()
+                if init_norm > 1e-8:
+                    growths.append(cur_norm / init_norm)
+            if growths:
+                stats["lora_up_growth"] = sum(growths) / len(growths)
+
         return stats
 
     def fake_update(self, batch) -> dict:
@@ -194,32 +218,47 @@ class Trainer:
 
     # -- preview / sentinel ----------------------------------------------------------
     @torch.no_grad()
-    def preview(self, batch, step: int, seed: int = 0) -> float:
-        """Render the fixed batch with the EMA generator at the last step; dump PNGs.
-
-        Returns mean per-image pixel std, assuming model pixels in [-1, 1]
-        (mapped to [0, 1]). RNG state is untouched, so previews never perturb training.
-        """
-        from PIL import Image
-
+    def _render_batch(self, batch, seed: int) -> torch.Tensor:
         r = self.cfg.num_steps - 1
         g = torch.Generator(device=self.device).manual_seed(seed)
         h, w = batch["hw"]
         images = []
+        for s in range(0, batch["y"].shape[0], self.cfg.micro_batch):
+            y = batch["y"][s : s + self.cfg.micro_batch].to(self.device)
+            mask = batch["y_mask"][s : s + self.cfg.micro_batch].to(self.device)
+            z = torch.randn(y.shape[0], 3, h, w, device=self.device, generator=g)
+            with self._autocast():
+                images.append(rollout_dataspace(self.model, z, y, mask, r, track_grad=False).float().cpu())
+        return ((torch.cat(images) + 1) / 2).clamp(0, 1)
+
+    @torch.no_grad()
+    def preview(self, batch, step: int, seed: int = 0) -> tuple[float, float]:
+        """Render the fixed batch with both raw generator and EMA generator; dump PNGs.
+
+        Returns (raw_pixel_std, ema_pixel_std).
+        """
+        from PIL import Image
+
+        # 1. Raw generator weights
+        x_raw = self._render_batch(batch, seed)
+        raw_std = x_raw.flatten(1).std(1).mean().item()
+
+        # 2. EMA weights
         with self.ema.applied():
-            for s in range(0, batch["y"].shape[0], self.cfg.micro_batch):
-                y = batch["y"][s : s + self.cfg.micro_batch].to(self.device)
-                mask = batch["y_mask"][s : s + self.cfg.micro_batch].to(self.device)
-                z = torch.randn(y.shape[0], 3, h, w, device=self.device, generator=g)
-                with self._autocast():
-                    images.append(rollout_dataspace(self.model, z, y, mask, r, track_grad=False).float().cpu())
-        x = ((torch.cat(images) + 1) / 2).clamp(0, 1)
+            x_ema = self._render_batch(batch, seed)
+        ema_std = x_ema.flatten(1).std(1).mean().item()
+
         if self.out_dir:
-            d = self.out_dir / "previews" / f"step{step:06d}"
-            d.mkdir(parents=True, exist_ok=True)
-            for i, img in enumerate(x):
-                Image.fromarray((img.permute(1, 2, 0) * 255).round().byte().numpy()).save(d / f"{i:02d}.png")
-        return x.flatten(1).std(1).mean().item()
+            d_raw = self.out_dir / "previews" / f"step{step:06d}_raw"
+            d_ema = self.out_dir / "previews" / f"step{step:06d}_ema"
+            d_raw.mkdir(parents=True, exist_ok=True)
+            d_ema.mkdir(parents=True, exist_ok=True)
+            for i, img in enumerate(x_raw):
+                Image.fromarray((img.permute(1, 2, 0) * 255).round().byte().numpy()).save(d_raw / f"{i:02d}.png")
+            for i, img in enumerate(x_ema):
+                Image.fromarray((img.permute(1, 2, 0) * 255).round().byte().numpy()).save(d_ema / f"{i:02d}.png")
+
+        return raw_std, ema_std
 
     # -- checkpointing -----------------------------------------------------------------
     def state_dict(self) -> dict:
@@ -267,15 +306,26 @@ class Trainer:
             if self.gen_updates >= total_gen_updates:
                 break
             kind, stats = self.turn(batch)
-            log(f"turn {self.turns} {kind} gen={self.gen_updates} fake={self.fake_updates} "
-                f"loss={stats['loss']:.4g} gnorm={stats['grad_norm']:.3g}")
+            msg = (
+                f"turn {self.turns} {kind} gen={self.gen_updates} fake={self.fake_updates} "
+                f"loss={stats['loss']:.4g} gnorm={stats['grad_norm']:.3g}"
+            )
+            if "v_diff" in stats:
+                msg += f" v_diff={stats['v_diff']:.4g}"
+            if "lora_up_growth" in stats:
+                msg += f" up_growth={stats['lora_up_growth']:.3f}"
+            log(msg)
             if kind != "gen":
                 continue
-            if c.preview_every and fixed_batch is not None and self.gen_updates % c.preview_every == 0:
-                std = self.preview(fixed_batch, self.gen_updates)
-                log(f"preview gen={self.gen_updates} pixel_std={std:.4f}")
-                if sentinel and sentinel.update(std):
-                    log("sentinel: pixel std collapsed, stopping")
+            should_preview = (
+                (isinstance(c.preview_every, (list, tuple, set)) and self.gen_updates in c.preview_every)
+                or (isinstance(c.preview_every, int) and c.preview_every > 0 and self.gen_updates % c.preview_every == 0)
+            )
+            if should_preview and fixed_batch is not None:
+                raw_std, ema_std = self.preview(fixed_batch, self.gen_updates)
+                log(f"preview gen={self.gen_updates} raw_pixel_std={raw_std:.4f} ema_pixel_std={ema_std:.4f}")
+                if sentinel and sentinel.update(raw_std):
+                    log(f"sentinel: raw pixel std ({raw_std:.4f}) outside bounds [{sentinel.min_std}, {sentinel.max_std}], stopping")
                     self._save_ckpt()
                     return False
             if c.ckpt_every and self.gen_updates % c.ckpt_every == 0:

@@ -42,8 +42,8 @@ def teacher_velocity_windowed(
 
 
 def dmd_generator_loss(
-    model, x0, sigma, noise, y, y_mask, null, null_mask, r, cfg_scale=3.0, cfg_window=0.6
-) -> torch.Tensor:
+    model, x0, sigma, noise, y, y_mask, null, null_mask, r, cfg_scale=3.0, cfg_window=0.6, return_aux=False
+) -> torch.Tensor | tuple[torch.Tensor, dict]:
     """Eq. 10 with w(tau)=1: sg[v_pos - v_fake] . x0, mean over all elements.
 
     ``x0`` must carry the generator graph (the rollout's last-step output).
@@ -57,16 +57,20 @@ def dmd_generator_loss(
     with torch.no_grad():
         with use_adapter(model, "fake"):
             v_fake = model(x_tau, sigma * MODEL_TIME_SCALE, y, r=r, y_mask=y_mask).x.float()
-    direction = (v_pos - v_fake).detach()
-    return (x0 * direction).mean()
+    diff = v_pos - v_fake
+    direction = diff.detach()
+    loss = (x0 * direction).mean()
+    if return_aux:
+        return loss, {"v_diff": diff.abs().mean().item()}
+    return loss
 
 
 def generator_loss(
-    model, z, y, y_mask, r, sigma, noise, null, null_mask, cfg_scale=3.0, cfg_window=0.6
-) -> torch.Tensor:
+    model, z, y, y_mask, r, sigma, noise, null, null_mask, cfg_scale=3.0, cfg_window=0.6, return_aux=False
+) -> torch.Tensor | tuple[torch.Tensor, dict]:
     """Rollout (grad on last step) + DMD loss."""
     x0 = rollout_dataspace(model, z, y, y_mask, r, track_grad=True)
-    return dmd_generator_loss(model, x0, sigma, noise, y, y_mask, null, null_mask, r, cfg_scale, cfg_window)
+    return dmd_generator_loss(model, x0, sigma, noise, y, y_mask, null, null_mask, r, cfg_scale, cfg_window, return_aux=return_aux)
 
 
 def fake_critic_loss(model, z, y, y_mask, r, sigma, noise) -> torch.Tensor:

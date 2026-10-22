@@ -76,7 +76,7 @@ def test_fit_preview_sentinel_and_checkpoints(tmp_path):
     sentinel = StdSentinel(min_std=10.0, patience=2)  # impossible to satisfy -> trips at 2nd preview
     done = tr.fit(batches(), total_gen_updates=5, fixed_batch=batch_at(99), sentinel=sentinel, log=lambda _: None)
     assert done is False and tr.gen_updates == 2
-    assert len(list((tmp_path / "previews").rglob("*.png"))) == 8  # 4 rows x 2 previews
+    assert len(list((tmp_path / "previews").rglob("*.png"))) == 16  # 4 rows x 2 previews x 2 (raw + ema)
     assert (tmp_path / "checkpoints" / "gen000002.pt").exists()
 
 
