@@ -6,20 +6,7 @@ import torch
 
 from src.models.dit import DataSpaceIris
 from src.models.lora import inject_lora, lora_layers, use_adapter
-from tiny import tiny_cond, tiny_model_config
-
-BRANCH_PREFIXES = ("x0_embedder", "step_embeddings", "fake_step_embeddings")
-
-
-def dataspace_iris(seed: int = 0) -> DataSpaceIris:
-    """Tiny DataSpaceIris: random base weights, ZERO branch modules."""
-    torch.manual_seed(seed)
-    model = DataSpaceIris(tiny_model_config())
-    with torch.no_grad():
-        for name, p in model.named_parameters():
-            if not name.startswith(BRANCH_PREFIXES):
-                p.normal_(0, 0.02)
-    return model.eval()
+from tiny import BRANCH_PREFIXES, dataspace_iris, tiny_cond
 
 
 def _perturb_branches(model, scale=0.05):

@@ -144,3 +144,24 @@ with torch.autocast("cuda", dtype=torch.bfloat16):
   (CPU torch wheel; transformers/accelerate/wandb/dion intentionally omitted — text encoder needs
   transformers on the H100 only).
 - Verify: `.venv/bin/python -c "import iris3b"`.
+
+## 12. Stage 4 decisions (paper-verified against 2610.12102v1 Appendix/Eq. 8-11)
+
+- Rollout (Eq. 8): r uniform in {0..R-1} per global batch; r no-grad steps then ONE grad step;
+  z fixed at every step; t pinned to 1000.0.
+- Renoise (Eq. 9): fresh independent eps + tau per loss; x_tau = (1-sigma')x0 + sigma'eps with
+  sigma' = shift_sigma(tau, 4.0); model conditioned on t = 1000*sigma'.
+- tau ~ Beta(2.5, 1) raw, shifted through Iris's shift, clamped to [0.02, 0.98] AFTER the shift
+  (PLAN.md's convention; raw-vs-shifted settled: shift, because Iris conditions on shifted levels).
+- Gen loss (Eq. 10) w(tau)=1: `(x0 * sg[v_pos - v_fake]).flatten(1).sum(1).mean()`; direction
+  detached; sum over pixels per IMPLEMENT.md.
+- Fake loss (Eq. 11): MSE(v_fake(x_tau, sigma', c, r), eps - x0), mean-reduction (Adam makes
+  loss scale irrelevant; matches turbo's critic convention).
+- CFG window: paper Sec. "CFG hyperparameter search": "a scale of 1.1 only over tau in [0.0, 0.6]"
+  -> apply CFG where sigma' <= 0.6, plain v_cond above. Window is on the SHIFTED sigma' (the same
+  variable that parameterizes the renoise and conditioning). cfg_scale stays 3.0 (Iris default)
+  per IMPLEMENT.md; paper's 1.1 was for their SiT setup.
+- Paper inits the r embedding from N(0, 0.02); we keep IMPLEMENT.md's zero-init (required by the
+  zero-init identity gates).
+- Tiny fixture: base weights random at std 0.2 (not untrained 0.02) and adaln_zero_init=False so
+  the adaLN gates are live and the text->image path (the only CFG-relevant path) has signal.

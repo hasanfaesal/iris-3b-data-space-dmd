@@ -10,10 +10,12 @@ from dataclasses import replace
 
 from iris3b.config import ModelConfig, PixelStageConfig
 from iris3b.models.dit import IrisDiT
+from src.models.dit import DataSpaceIris
 
 TINY_TEXT_DIM = 32
 TINY_TEXT_LEN = 16
 TINY_PATCH = 4
+BRANCH_PREFIXES = ("x0_embedder", "step_embeddings", "fake_step_embeddings")
 
 
 def tiny_model_config(**overrides) -> ModelConfig:
@@ -27,7 +29,7 @@ def tiny_model_config(**overrides) -> ModelConfig:
         gated_attention=True,  # wraps attn_gate Linears too
         patch_size=TINY_PATCH,
         modulation="shared_bias",  # shared cores adaln_img / adaln_txt, like the real model
-        adaln_zero_init=True,
+        adaln_zero_init=False,  # fixture mimics a TRAINED model: live gates, real text mixing
         rope_aspect="isotropic",  # correct on non-square grids (aspect buckets)
         text_dim=TINY_TEXT_DIM,
         text_len=TINY_TEXT_LEN,
@@ -54,3 +56,19 @@ def tiny_iris(seed: int = 0, **overrides) -> IrisDiT:
         for p in model.parameters():
             p.normal_(0, 0.02)
     return model
+
+
+def dataspace_iris(seed: int = 0, **overrides) -> DataSpaceIris:
+    """Tiny DataSpaceIris: random base weights, ZERO branch modules.
+
+    Weight scale 0.2 (not the untrained 0.02): the adaLN gates and t_embedder
+    of an untrained model are tiny, which suppresses attention mixing and with
+    it the text->image path that the CFG tests must see.
+    """
+    torch.manual_seed(seed)
+    model = DataSpaceIris(tiny_model_config(**overrides))
+    with torch.no_grad():
+        for name, p in model.named_parameters():
+            if not name.startswith(BRANCH_PREFIXES):
+                p.normal_(0, 0.2)
+    return model.eval()
