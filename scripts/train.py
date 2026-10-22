@@ -71,7 +71,12 @@ def main():
     ap.add_argument("--warmup", type=int, default=200, help="fake warmup updates")
     ap.add_argument("--fake-per-gen", type=int, default=4, help="critic updates per generator update")
     ap.add_argument("--overfit", type=int, default=0, help="overfit on first N prompts in cache")
-    ap.add_argument("--ac", default="pixel_only", choices=["none", "full", "selective_op", "selective_layer", "pixel_only"])
+    ap.add_argument(
+        "--ac",
+        default="full",
+        choices=["none", "full", "selective_op", "selective_layer", "pixel_only"],
+        help="activation checkpointing (default full; pixel_only OOMs at micro-batch 4 on 80 GB)",
+    )
     ap.add_argument("--ac-every", type=int, default=2)
     ap.add_argument("--min-std", type=float, default=0.2, help="sentinel floor; 0.7 * teacher pixel std")
     args = ap.parse_args()

@@ -10,6 +10,9 @@ Checks, in order (exit code 1 if a gate fails; results land in <out>/verificatio
   3. F: seconds per 1 MP teacher forward (picks the critic ratio, PLAN.md table)
   4. VRAM / step-time ramp over micro-batch sizes with the real Trainer
   5. every adapter B matrix moved off zero (no dead adapters)
+
+Ramp --ac does not include pixel_only: trunk un-checkpointed OOMs at mb=4 on H100 80 GB.
+Training uses --ac full by default (train.py still accepts pixel_only for ad-hoc tests).
 """
 
 import argparse
@@ -260,7 +263,12 @@ def main():
     ap.add_argument("--sample-steps", type=int, default=20)
     ap.add_argument("--mbs", type=int, nargs="+", default=[2, 4, 6])
     ap.add_argument("--repeats", type=int, default=3, help="number of timed repeats per micro-batch")
-    ap.add_argument("--ac", default="full", choices=["none", "full", "selective_op", "selective_layer", "pixel_only"])
+    ap.add_argument(
+        "--ac",
+        default="full",
+        choices=["none", "full", "selective_op", "selective_layer"],
+        help="ramp AC policy (pixel_only omitted: OOM at mb=4 on 80 GB; train.py still accepts it)",
+    )
     ap.add_argument("--ac-every", type=int, default=2)
     ap.add_argument("--ranks", type=int, nargs=2, default=[128, 128], metavar=("GEN", "FAKE"))
     args = ap.parse_args()
