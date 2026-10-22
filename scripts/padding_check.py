@@ -189,9 +189,13 @@ def main():
                 null_pad, null_mask_pad = pad_to(null_y, null_m, text_len)
                 batch = y_cut.shape[0]
 
-                def forward(x, t, y, m):
+                def forward(x, t, y, m, chunk_size=4):
+                    out = []
                     with torch.no_grad(), autocast_ctx():
-                        return model(x, t, y, y_mask=m).x.float()
+                        for k in range(0, x.shape[0], chunk_size):
+                            out.append(model(x[k : k + chunk_size], t[k : k + chunk_size],
+                                             y[k : k + chunk_size], y_mask=m[k : k + chunk_size]).x.float())
+                    return torch.cat(out, dim=0)
 
                 log(f"== dtype={dtype_name} group='{gname}' ==")
                 lens = mask_cut.sum(1).tolist()
@@ -199,8 +203,7 @@ def main():
                     f"| pad300 target {text_len}")
 
                 z = torch.randn(batch, 3, *hw, generator=g).to(device)
-                with autocast_ctx():
-                    v0 = model(z, torch.full((batch,), 1000.0, device=device), y_cut, y_mask=mask_cut).x
+                v0 = forward(z, torch.full((batch,), 1000.0, device=device), y_cut, mask_cut)
                 x0_hat = z - v0.float()  # convention B: matches current training's rollout step 1
                 log("  inputs: z fixed; x0_hat = z - v_cond_B(z, t=1000) (convention B); "
                     "x_tau(t<1000) = (1-s)x0_hat + s*eps; identical for A and B")
