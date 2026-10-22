@@ -87,7 +87,8 @@ export PYTHONPATH="$PWD/vendor/iris-3b/src${PYTHONPATH:+:$PYTHONPATH}"
 
 # base weights (~12 GB fp32) and the text encoder (~8 GB), both via fast HF
 mkdir -p "$MODELS"
-hf download speridlabs/iris-3b --local-dir "$MODELS/iris-3b" --exclude "depth/*" "upscaler/*" "turbo/*"
+hf download speridlabs/iris-3b --local-dir "$MODELS/iris-3b" \
+  --exclude "depth/*" --exclude "upscaler/*" --exclude "turbo/*"
 hf download Qwen/Qwen3-VL-4B-Instruct
 
 python - <<'EOF'
