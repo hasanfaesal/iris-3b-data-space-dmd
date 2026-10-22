@@ -6,3 +6,6 @@ vendor/
 .venv/
 __pycache__/
 previews/
+runs/
+output/
+
