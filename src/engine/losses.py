@@ -39,12 +39,12 @@ def teacher_velocity_windowed(
 def dmd_generator_loss(
     model, x0, sigma, noise, y, y_mask, null, null_mask, r, cfg_scale=3.0, cfg_window=0.6
 ) -> torch.Tensor:
-    """Eq. 10 with w(tau)=1: sg[v_pos - v_fake] . x0, summed over pixels.
+    """Eq. 10 with w(tau)=1: sg[v_pos - v_fake] . x0, mean over all elements.
 
     ``x0`` must carry the generator graph (the rollout's last-step output).
-    Sum over pixel dims (not mean) keeps gradients away from Adam's eps floor.
-    The MSE-style mean-reduction of the critic loss makes loss SCALE
-    inconsequential for Adam, so w(tau)=1 plain is used here too.
+    Mean reduction (same as the critic) keeps grad_norm in a readable range.
+    Loss SCALE is inconsequential for Adam (scale-invariant) and the clip is
+    inactive at these norms, so w(tau)=1 plain is used here too.
     """
     per = _per_sample(sigma, x0)
     x_tau = (1 - per) * x0 + per * noise  # Eq. 9; graph kept through x0
@@ -53,7 +53,7 @@ def dmd_generator_loss(
         with use_adapter(model, "fake"):
             v_fake = model(x_tau, sigma * MODEL_TIME_SCALE, y, r=r, y_mask=y_mask).x.float()
     direction = (v_pos - v_fake).detach()
-    return (x0 * direction).flatten(1).sum(1).mean()
+    return (x0 * direction).mean()
 
 
 def generator_loss(

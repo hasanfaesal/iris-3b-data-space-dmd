@@ -63,7 +63,7 @@ def test_cfg_scale_invariance_above_window():
 
 
 def test_dmd_gradient_is_the_teacher_direction():
-    """Analytic identity: dL/dx0 = (v_pos - v_fake)/B, hence a gradient DESCENT
+    """Analytic identity: dL/dx0 = (v_pos - v_fake)/numel, hence a gradient DESCENT
     step moves x0 along +(x0_teacher - x0_fake)/sigma, i.e. toward the
     teacher's clean prediction."""
     model = _model_with_both()
@@ -79,11 +79,11 @@ def test_dmd_gradient_is_the_teacher_direction():
     with torch.no_grad():
         with use_adapter(model, "fake"):
             v_fake = model(x_tau, sigma * 1000.0, y, r=1, y_mask=mask).x
-    batch = z.shape[0]
-    assert torch.allclose(x0.grad, (v_pos - v_fake) / batch, atol=1e-5)
+    n = x0.numel()  # mean reduction over every element
+    assert torch.allclose(x0.grad * n, v_pos - v_fake, atol=1e-5)
     x0_pos = x_tau - per * v_pos
     x0_fake = x_tau - per * v_fake
-    assert torch.allclose(-x0.grad, (x0_pos - x0_fake) / (per * batch), atol=1e-5)
+    assert torch.allclose(-x0.grad * n, (x0_pos - x0_fake) / per, atol=1e-5)
 
 
 def test_fake_loss_trains_fake_only():
