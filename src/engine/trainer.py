@@ -42,7 +42,7 @@ class TrainConfig:
     num_steps: int = 4  # R; micro-batch k uses r = k % num_steps
     shift: float = 4.0
     cfg_scale: float = 3.0
-    cfg_window: float = 0.6
+    cfg_window: float = 1.0  # shifted sigma' upper bound for CFG; 1.0 = every row
     preview_every: int | list[int] | set[int] = 250  # generator updates; 0 disables, or list of steps
     ckpt_every: int = 250  # generator updates; 0 disables
 

@@ -32,7 +32,7 @@ def test_cfg_window_applies_only_below_threshold():
     sigma = torch.tensor([0.3, 0.9])
     y, mask = tiny_cond(2)
     null, null_mask = tiny_cond(2)
-    v_pos = teacher_velocity_windowed(model, x_tau, sigma, y, mask, null, null_mask, cfg_scale=3.0)
+    v_pos = teacher_velocity_windowed(model, x_tau, sigma, y, mask, null, null_mask, cfg_scale=3.0, cfg_window=0.6)
     t = sigma * 1000.0
     with torch.no_grad():
         with use_adapter(model, "off"):
@@ -44,6 +44,22 @@ def test_cfg_window_applies_only_below_threshold():
     assert torch.allclose(v_pos[1], v_cond[1], atol=1e-5)  # sigma' 0.9 > 0.6: CFG off
 
 
+def test_default_cfg_covers_high_noise_rows():
+    """Regression: the default must guide every row, including sigma' 0.9 (the bulk of Beta-then-shift)."""
+    model = _model_with_both()
+    x_tau = torch.randn(2, 3, 16, 16)
+    sigma = torch.tensor([0.3, 0.9])
+    y, mask = tiny_cond(2)
+    null, null_mask = tiny_cond(2)
+    v_pos = teacher_velocity_windowed(model, x_tau, sigma, y, mask, null, null_mask, cfg_scale=3.0)
+    t = sigma * 1000.0
+    with torch.no_grad():
+        with use_adapter(model, "off"):
+            v_cond = model(x_tau, t, y, y_mask=mask).x
+            v_uncond = model(x_tau, t, null, y_mask=null_mask).x
+    assert torch.allclose(v_pos, v_uncond + 3.0 * (v_cond - v_uncond), atol=1e-5)
+
+
 def test_cfg_scale_invariance_above_window():
     """Above the window the loss must not depend on cfg_scale; below, it must."""
     model = _model_with_both()
@@ -52,7 +68,7 @@ def test_cfg_scale_invariance_above_window():
     noise = torch.randn_like(z)
     high = torch.full((2,), 0.9)
     low = torch.full((2,), 0.3)
-    kw = dict(y=y, y_mask=mask, null=null, null_mask=null_mask, r=1)
+    kw = dict(y=y, y_mask=mask, null=null, null_mask=null_mask, r=1, cfg_window=0.6)
     with torch.no_grad():
         l_hi_a = dmd_generator_loss(model, x0, high, noise, cfg_scale=3.0, **kw)
         l_hi_b = dmd_generator_loss(model, x0, high, noise, cfg_scale=1.0, **kw)

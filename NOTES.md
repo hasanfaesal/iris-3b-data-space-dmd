@@ -158,9 +158,8 @@ with torch.autocast("cuda", dtype=torch.bfloat16):
 - Fake loss (Eq. 11): MSE(v_fake(x_tau, sigma', c, r), eps - x0), mean-reduction (Adam makes
   loss scale irrelevant; matches turbo's critic convention).
 - CFG window: paper Sec. "CFG hyperparameter search": "a scale of 1.1 only over tau in [0.0, 0.6]"
-  -> apply CFG where sigma' <= 0.6, plain v_cond above. Window is on the SHIFTED sigma' (the same
-  variable that parameterizes the renoise and conditioning). cfg_scale stays 3.0 (Iris default)
-  per IMPLEMENT.md; paper's 1.1 was for their SiT setup.
+  -> SUPERSEDED (2026-10-23, see section 22): the window is now 1.0, i.e. CFG at every sigma'.
+  cfg_scale stays 3.0 (Iris default) per IMPLEMENT.md; paper's 1.1 was for their SiT setup.
 - Paper inits the r embedding from N(0, 0.02); we keep IMPLEMENT.md's zero-init (required by the
   zero-init identity gates).
 - Tiny fixture: base weights random at std 0.2 (not untrained 0.02) and adaln_zero_init=False so
@@ -371,11 +370,23 @@ Go/no-go:
 - Experiment:
   - Rendered prompts 02 and 04 from `/home/dev/cache` (padded to 300 tokens) using the official `FlowDPMSolver` (20 steps, order=2, cfg=4.0, shift=3.0, 1024x1024, adapters off, seed=0).
 - Results:
-  - Prompt 02: `pixel_std = 0.6155`. Razor-sharp gnarled tree in desert with glowing hollow at sunset.
-  - Prompt 04: `pixel_std = 0.6094`. Razor-sharp jewel-encrusted phoenix diving underwater into luminous fish.
+  - Prompt 02: `pixel_std = 0.6155` on the [-1, 1] scale, i.e. ~0.31 on [0, 1] (the scale the previews and sentinel use). Razor-sharp gnarled tree in desert with glowing hollow at sunset.
+  - Prompt 04: `pixel_std = 0.6094` on the [-1, 1] scale, i.e. ~0.30 on [0, 1]. Razor-sharp jewel-encrusted phoenix diving underwater into luminous fish.
+  - Units: the 0.61 values were computed on the teacher's raw [-1, 1] output. Compare to student previews only after halving, so the teacher target is ~0.30, not 0.61.
   - Direct comparison with preview images: the "Y" shape and murky blue/beige composition in earlier student previews (e.g. `04.png`) match the exact gross structure and color distribution of Prompt 04's phoenix.
 - Conclusion:
   - The cache, text tokenization (padded to 300), null conditioning, and DiT model evaluate with pristine fidelity. The foundation is solid.
   - The diffuse silhouette behavior is confirmed to be an under-warmed critic ($v_{\text{fake}}$). With `warmup=20`, the critic has not learned the generator's distribution, making the update direction dominated by the teacher's CFG expectation.
   - Next training test: set `--warmup 200` to allow the critic to establish an accurate boundary before student updates begin.
 
+
+## 22. CFG window fix (2026-10-23)
+
+- Bug: the paper's window tau in [0, 0.6] is on pre-shift tau, but the code applied it to the shifted sigma'
+  (Iris shift 4). Only 3.9% of rows (sigma' <= 0.6) got CFG; the other 96% were matched to the unguided teacher.
+- Fix: `cfg_window` default is now 1.0 in `teacher_velocity_windowed`, `dmd_generator_loss`, `generator_loss`,
+  and `TrainConfig`, so every row is guided. Matches both vendored Iris distillers (CFG at all levels).
+- Cost: the uncond teacher pass now runs on every row (was ~4%), adding ~1 teacher forward per generator row.
+- Tests: window test and invariance test pin `cfg_window=0.6`; new `test_default_cfg_covers_high_noise_rows`. 47 pass (CPU).
+- NOT yet verified on GPU: the rerun on the H100 is the check (saturation vs teacher should stop falling).
+- Caveat: The paper found CFG over the full range hurt FID on ImageNet. The Iris distillers use it anyway, and the paper used a 1.1 scale, not 3.0. If the rerun oversaturates, the next lever is the CFG scale, not the window.

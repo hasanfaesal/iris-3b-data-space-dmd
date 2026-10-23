@@ -19,15 +19,15 @@ def _per_sample(sigma: torch.Tensor, like: torch.Tensor) -> torch.Tensor:
 
 
 def teacher_velocity_windowed(
-    model, x_tau, sigma, y, y_mask, null, null_mask, cfg_scale=3.0, cfg_window=0.6
+    model, x_tau, sigma, y, y_mask, null, null_mask, cfg_scale=3.0, cfg_window=1.0
 ) -> torch.Tensor:
-    """Teacher velocity with the paper's guidance window (tau in [0.0, 0.6]).
+    """Teacher velocity with CFG at every noise level by default.
 
-    CFG where the shifted sigma' <= cfg_window; plain conditional velocity
-    above it (prevents color blooming at high noise). Cond and uncond passes
-    run sequentially to halve peak memory vs a doubled batch. The uncond pass
-    runs only on the in-window rows (~4% of rows under Beta(2.5, 1)); the rest
-    would be discarded.
+    CFG where the shifted sigma' <= cfg_window (default 1.0 = all rows, as in the
+    Iris distillers). The paper's [0, 0.6] window is on pre-shift tau, which
+    is not the shifted sigma' we condition on; it would leave ~96% of rows unguided.
+    Cond and uncond passes run sequentially to halve peak memory vs a doubled batch.
+    The uncond pass runs only on the in-window rows.
     """
     t_model = sigma * MODEL_TIME_SCALE
     with torch.no_grad():
@@ -42,7 +42,7 @@ def teacher_velocity_windowed(
 
 
 def dmd_generator_loss(
-    model, x0, sigma, noise, y, y_mask, null, null_mask, r, cfg_scale=3.0, cfg_window=0.6, return_aux=False
+    model, x0, sigma, noise, y, y_mask, null, null_mask, r, cfg_scale=3.0, cfg_window=1.0, return_aux=False
 ) -> torch.Tensor | tuple[torch.Tensor, dict]:
     """Eq. 10 with w(tau)=1: sg[v_pos - v_fake] . x0, mean over all elements.
 
@@ -66,7 +66,7 @@ def dmd_generator_loss(
 
 
 def generator_loss(
-    model, z, y, y_mask, r, sigma, noise, null, null_mask, cfg_scale=3.0, cfg_window=0.6, return_aux=False
+    model, z, y, y_mask, r, sigma, noise, null, null_mask, cfg_scale=3.0, cfg_window=1.0, return_aux=False
 ) -> torch.Tensor | tuple[torch.Tensor, dict]:
     """Rollout (grad on last step) + DMD loss."""
     x0 = rollout_dataspace(model, z, y, y_mask, r, track_grad=True)
