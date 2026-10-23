@@ -269,7 +269,8 @@ def main():
         sentinel=sentinel,
         platform_sentinel=platform_sentinel,
     )
-    trainer._save_full()
+    if ok:
+        trainer._save_full()
     sys.exit(0 if ok else 2)
 
 
