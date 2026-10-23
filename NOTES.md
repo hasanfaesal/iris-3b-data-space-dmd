@@ -396,10 +396,12 @@ Go/no-go:
   sigma' <= 0.3 (~0.3% of rows), where fine detail is learnable (both working Iris
   distillers sample the renoise level ~Uniform(0.02, 0.98) pre-shift, i.e. ~26% of rows
   below sigma' 0.6 and ~8% below 0.3).
-- Fix status: the CFG-everywhere fix is already committed (§22, cfb860e). The renoise sampler is
-  still Beta(2.5,1)+shift (σ' median 0.93; ~0.3% of rows below σ' 0.3); switching to
-  u ~ Uniform(0.02, 0.98) pre-shift (pentaCoxian's recipe, σ' median 0.80, ~8% below 0.3) is
-  the remaining open decision before the Stage 8 rerun.
+- Fix status: the CFG-everywhere fix is committed (§22, cfb860e). The renoise sampler fix is
+  committed too (e2c1e05): u ~ Uniform(0.02, 0.98) pre-shift, clamp moved onto u (the old
+  post-shift clamp piled ~6% of rows on exactly sigma'=0.98; now 5.8% land in (0.98, 0.995),
+  which pentaCoxian's range also allows). Measured on 500k draws: median sigma' 0.800,
+  P(sigma'<=0.3)=0.081. 47 tests pass (CPU). Next: rerun the 16-prompt, 100-update
+  diagnostic as `runs/diagnostic_v4` (everything else unchanged; direct A/B vs v3).
 - Node iris-dsdmd-h100-s7 is awake under a 4-hour hold (until ~12:19 UTC 2026-10-23).
 
 
