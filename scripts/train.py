@@ -248,6 +248,11 @@ def main():
         + (f" (teacher_std={teacher_std:.4f})" if teacher_std is not None else ""),
         flush=True,
     )
+    print(
+        "rollback: first static -> gen lr 5e-6, first collapse or non-finite loss -> gen lr 1e-5, "
+        "fake lr stays 5e-5, restore checkpoints/last_good.pt; a second trip stops",
+        flush=True,
+    )
 
     from src.utils.platform import PlatformSentinel, parse_deadline
 

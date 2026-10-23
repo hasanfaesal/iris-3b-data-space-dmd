@@ -3,11 +3,12 @@
 import importlib.util
 import itertools
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import torch
 
-from src.engine.trainer import EMA, StdSentinel, TrainConfig, Trainer
+from src.engine.trainer import EMA, StdSentinel, TrainConfig, Trainer, rollback_gen_lr
 from src.models.lora import inject_lora, lora_layers
 from tiny import dataspace_iris, tiny_cond
 
@@ -31,7 +32,7 @@ def make_trainer(out_dir=None):
     inject_lora(model, "gen", 8)
     inject_lora(model, "fake", 4)
     null, null_mask = tiny_cond(1)
-    return Trainer(model, null, null_mask, CFG, out_dir=out_dir)
+    return Trainer(model, null, null_mask, replace(CFG), out_dir=out_dir)
 
 
 def test_20_turns_finite_schedule_and_live_adapters():
@@ -164,8 +165,6 @@ def test_every_r_trained_when_batch_has_fewer_microbatches_than_steps():
 
 
 def test_one_rolling_full_and_slim_without_optimizer(tmp_path):
-    from dataclasses import replace
-
     tr = make_trainer(tmp_path)
     tr.cfg = replace(tr.cfg, rolling_every=1, ckpt_every=2, preview_every=0)
     assert tr.fit(batches(), total_gen_updates=2, log=lambda _: None)
@@ -259,3 +258,68 @@ def test_platform_sentinel_deadline_and_clean_exit(tmp_path):
     ok = tr.fit(batches(), total_gen_updates=10, platform_sentinel=mock_sentinel, log=lambda _: None)
     assert ok is True  # platform early stop is clean exit
     assert (tmp_path / "checkpoints" / "last.pt").is_file()
+
+
+def test_rollback_lr_never_raises():
+    assert rollback_gen_lr("static", 2e-5) == 5e-6
+    assert rollback_gen_lr("collapse", 2e-5) == 1e-5
+    assert rollback_gen_lr("nan", 2e-5) == 1e-5
+    assert rollback_gen_lr("collapse", 1e-6) == 1e-6
+
+
+def test_rollback_once_then_stop(tmp_path, monkeypatch):
+    tr = make_trainer(tmp_path)
+    tr.cfg.preview_every, tr.cfg.rolling_every, tr.cfg.ckpt_every = 1, 0, 0
+    seen = []
+
+    def fake_preview(batch, step, seed=0):
+        std = 0.25 if len(seen) < 2 else 0.50  # two healthy previews, then static
+        seen.append(step)
+        return std, std
+
+    monkeypatch.setattr(tr, "preview", fake_preview)
+    sentinel = StdSentinel(min_std=0.18, max_std=0.40, patience=2)
+    done = tr.fit(batches(), total_gen_updates=20, fixed_batch=batch_at(99), sentinel=sentinel, log=lambda _: None)
+    assert done is False and tr.rolled_back
+    assert tr.gen_opt.param_groups[0]["lr"] == 5e-6
+    assert tr.fake_opt.param_groups[0]["lr"] == 5e-5  # critic LR is not touched
+    good = torch.load(tmp_path / "checkpoints" / "last_good.pt", map_location="cpu", weights_only=False)
+    last = torch.load(tmp_path / "checkpoints" / "last.pt", map_location="cpu", weights_only=False)
+    assert good["gen_updates"] == last["gen_updates"] == 2  # the second stop did not overwrite it
+    assert good["rolled_back"] and good["gen_opt"]["param_groups"][0]["lr"] == 5e-6
+    assert good["fake_opt"]["param_groups"][0]["lr"] == 5e-5
+    kinds = [json.loads(ln)["kind"] for ln in (tmp_path / "metrics.jsonl").read_text().splitlines()]
+    assert kinds.count("rollback") == 1 and kinds[-1] == "stop"
+
+
+def test_nan_rolls_back_to_collapse_lr(tmp_path, monkeypatch):
+    tr = make_trainer(tmp_path)
+    tr.cfg.preview_every, tr.cfg.rolling_every, tr.cfg.ckpt_every = 1, 0, 0
+    monkeypatch.setattr(tr, "preview", lambda batch, step, seed=0: (0.25, 0.25))
+    real_turn = tr.turn
+
+    def exploding(batch):  # the turn after the first generator update raises, and so does the one after the restore
+        if tr.gen_updates >= 1:
+            raise FloatingPointError("boom")
+        return real_turn(batch)
+
+    monkeypatch.setattr(tr, "turn", exploding)
+    sentinel = StdSentinel(min_std=0.05, max_std=0.90, patience=2)
+    done = tr.fit(batches(), total_gen_updates=20, fixed_batch=batch_at(99), sentinel=sentinel, log=lambda _: None)
+    assert done is False and tr.rolled_back
+    assert tr.gen_opt.param_groups[0]["lr"] == 1e-5
+    assert tr.fake_opt.param_groups[0]["lr"] == 5e-5
+
+
+def test_fit_writes_metrics_and_status(tmp_path):
+    tr = make_trainer(out_dir=tmp_path)
+    ok = tr.fit(batches(), total_gen_updates=2, log=lambda _: None)
+    assert ok
+    lines = [json.loads(ln) for ln in (tmp_path / "metrics.jsonl").read_text().splitlines() if ln.strip()]
+    assert lines[-1]["kind"] == "turn"
+    assert lines[-1]["gen_updates"] == 2
+    assert all(ln["kind"] == "turn" for ln in lines)
+    status = json.loads((tmp_path / "status.json").read_text())
+    assert status["health"] == "complete"
+    assert status["gen_updates"] == 2
+    assert status["target_gen_updates"] == 2

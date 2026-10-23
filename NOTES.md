@@ -396,7 +396,7 @@ Go/no-go:
   never visited sigma' <= 0.3 (~0.3% of rows); see §24.
 - Fixes: CFG at every sigma' (§22, cfb860e); renoise sampler (§24, e2c1e05). Stage 8 rerun:
   `runs/diagnostic_v4` via `scripts/run_diagnostic.sh` (same 16 prompts, 100 updates, warmup 200;
-  A/B vs v3). GPU smoke in progress as of 2026-10-23.
+  A/B vs v3). Completed 2026-10-23 — metrics and gate in §25.
 
 
 ## 22. CFG window fix (2026-10-23)
@@ -433,9 +433,149 @@ Go/no-go:
   than broken Beta+shift (0.039 at 0.6).
 - Tests: `tests/test_rollout.py::test_sigma_sampler_bounds_and_shape` pins median and low-σ' mass.
   Same sampler feeds generator and critic turns (`trainer.py::_micro_batches`).
-- GPU verification: `diagnostic_v4` — expect preview chroma to **rise or hold** vs v3, not fall;
-  detail may still lag at 100 updates (under-trained), but mid-noise rows should receive signal.
+- GPU verification: `diagnostic_v4` completed — chroma and std rose vs v3; detail still soft at
+  100 updates (under-trained). Full numbers in §25.
 - Pair with §22 for the full v3 → v4 delta: guided teacher on every row **and** mid/low-σ' renoise.
+
+## 25. Stage 8 `diagnostic_v4` results & Stage 9 launch gate (2026-10-23)
+
+### `diagnostic_v4` outcome (H100, 100 gen updates)
+
+- Run: `scripts/run_diagnostic.sh` → `runs/diagnostic_v4`, 16 overfit prompts (cache rows 0–15),
+  `--warmup 200`, `--ac full`, `--min-std 0.0`, previews at gen 10/20/40/60/80/100 (raw + EMA).
+  Finished exit 0; log `logs/diagnostic_v4.log`; previews under `previews/diagnostic_v4/previews/`.
+- Preview pixel std (mean over 16 images, [0, 1]): 10 → 0.104, 20 → 0.121, 40 → 0.188,
+  60 → 0.196, 80 → 0.205, 100 → 0.207 (raw) / 0.204 (EMA). Teacher target on prompts 02/04
+  ~0.30 (§21); student at step 100 ≈ **70%** of teacher std.
+- v3 → v4 (same prompts): step-100 mean pixel std 0.079 → 0.207; prompt 02 chroma 0.140 → 0.274;
+  prompt 04 chroma 0.043 → 0.222 (washed wing → coloured phoenix). Layout and colour improved a lot;
+  fine texture (bark, jewels, fish) still missing vs teacher.
+- Qualitative: step 10 = colour blobs; step 100 = correct scenes, soft digital-illustration look.
+  No mode collapse across 16 prompts; occasional 16×16-ish sky blockiness; EMA ≈ raw at step 100.
+- Critic loss rose ~0.004 → ~0.012 while generator moved — expected while the fake tracks a moving
+  target; watch for sustained climb without levelling.
+- **Verdict:** CFG (§22) + renoise (§24) fixes are validated. Step-100 blur is **expected** at
+  ~4% of a 2,400-update budget; sharpness was still rising (slowing 60→100). Recipe is ready for
+  the main run; **launch plumbing is not** (below).
+
+### Training recipe for Stage 9 (unchanged from v4)
+
+- Gen 2e-5 / fake 5e-5, Adam β=(0, 0.95), clip 1.0, TTUR 4:1, fake warmup **200**, EMA 0.999
+  with ramp (`trainer.py::EMA.update`), `cfg_scale=3.0`, `cfg_window=1.0`, renoise
+  `u ~ Uniform(0.02, 0.98)` pre-shift, global batch 16 (mb 4), full AC, ~75–77 s per 4:1 update.
+- Ceiling **2,400** gen updates (~50 h) — pick best checkpoint from validation/previews, not fixed
+  step count (§20).
+
+### Blockers before detached main run (not yet implemented)
+
+1. **Std sentinel false stop:** `train.py` defaults `--min-std 0.2`; v4 only reached 0.207 and
+   low-contrast prompts (e.g. anime on white, preview 00 ~0.17) sit below 0.2. **Fix:** compare
+   student preview std to a **teacher baseline** on the same fixed prompts (e.g. stop if
+   `< 0.6 × teacher_std` for 2 checks); keep `max_std=0.4` for static explosion.
+2. **Preview batch is wrong:** `fixed = next(batches(10**6))` always yields epoch-1 batch 0, not a
+   held-out set (`scripts/train.py`). **Fix:** load fixed rows from `cache_eval` or a pinned index
+   list; do not use a training batch for monitoring renders.
+3. **Resume skips data order after epoch 0:** `batches(start)` only skips inside epoch 0
+   (~1,491 batches ≈ gen update 258); resume at turn 2999 restarts at epoch 1 batch 0 instead of
+   epoch 2 batch 17 (verified by simulation). **Fix:** carry `(epoch, batch_in_epoch)` or equivalent
+   in checkpoint / skip logic.
+4. **Preview cadence:** every 250 gen updates ≈ 5.3 h — too sparse for 3–4 h human checks.
+   **Fix:** preview every **50** updates (~1 h); render **r = 0..3** (all four refinement steps),
+   raw + EMA; log per-image and mean std/chroma/sharpness vs teacher.
+5. **Checkpoint disk:** full `state_dict` (two rank-128 adapters + dual optimizers + fast/slow EMA)
+   may be ~7 GB each (estimate); 10× @ 250 steps + 139 GB cache risks filling the node disk.
+   **Fix:** prune old full checkpoints; rolling `last.pt` every 50–100; slim `gen######.pt` every
+   250 for best-checkpoint selection; `df -h` at launch; delete `runs/diagnostic_*` ckpts on node.
+6. **`lora_up_growth` metric broken:** zero-init `lora_up` → division skipped in `gen_update`;
+   log absolute `lora_up` norm instead.
+7. **`run_main.sh`:** mirror `run_diagnostic.sh` (detach log, self-stop via metadata POST, sync).
+8. **Deadline guard:** credit expires **2026-10-26 11:53 UTC**; `get_billing` 2026-10-23 showed
+   **~$316** available at ~$0.056/min on parked H100 (Friday discount). Target save+exit by
+   **~2026-10-26 05:00 UTC** to leave eval/export margin. Poll node `/v1/events` for machine
+   retirement (~45 min warning).
+
+### When training stops (planned policy)
+
+| Trigger | Action |
+|---------|--------|
+| `total_gen_updates` reached (default 2400) | Save `last.pt`, exit 0, stop node |
+| Non-finite loss | Raise / hard stop |
+| Preview std **> 0.40** (static) or patch-grid score spike | Hard stop after save |
+| Preview std **< 0.6 × teacher** on fixed set, 2 consecutive previews | **One rollback** (see below), then hard stop if repeats |
+| User `--deadline` UTC | Graceful save and exit |
+| Sentinel today (`patience=1`, raw std only) | Replace with teacher-relative rule above |
+
+Platform: detached trainer keeps node busy (no 15 min idle stop); `run_diagnostic.sh` already calls
+`POST http://169.254.42.1/v1/stop` on exit.
+
+### Rollback on sentinel (user decision: lower gen LR only, not halve both)
+
+- PLAN.md (lines 165–166) says revert checkpoint and **halve both** LRs (gen 1e-5, fake 2.5e-5).
+- Preferred for this project: **keep fake at 5e-5**, cut **generator only** so the critic stays
+  faster than the generator (PLAN line 162; fake lag is a common failure mode).
+- Cut size by failure type:
+  - **Static / texture** (high std, speckle): gen **2e-5 → 5e-6** (§18, §20 go/no-go; community
+    collapse was LR-driven at 5e-5).
+  - **Collapse / NaN** (low std vs teacher): gen **2e-5 → 1e-5** (PLAN “safe” fallback; community
+    released at half LR after collapse).
+- **Once per run:** restore weights + optimizer from last **passing** preview checkpoint (≤50
+  updates lost), apply new gen_lr in optimizer param groups; second trip → save and park.
+- **Under-training** (still blurry base at update 250): PLAN says raise gen to **3e-5** — opposite
+  lever; decide at first 250-preview human check.
+
+### Realism vs “AI / illustrated” look
+
+- Cause is mostly **prompt mix**, not a separate student failure mode: of 23,854 train prompts,
+  ~6% match photo-only heuristics, ~45% contain art/style words; Flux (42% of pool) is ~77%
+  art-tagged; Pick-a-Pic includes anime tag lists (preview 00).
+- Stage 8 previews use rows 0–15: long Flux “dreamlike digital painting” captions + anime tags.
+- **Planned (both filter + add), without re-indexing existing cache:**
+  - **Filter at sample time** via `keep_indices` (do **not** delete rows from `prompts_train.jsonl` —
+    cache `row_XXXXXX.pt` is row-order keyed). Rough drop: Flux rows with art regex (~7,449) +
+    Pick-a-Pic anime/tag-list (~340) → **~16,065** kept from current pool.
+  - **Add ~8–10K photo captions** appended at end of jsonl; encode only new rows with
+    `cache_embeddings.py` (resumes per row). Candidate: `google/docci` (~15K human photo
+    descriptions, CC-BY-4.0) — download text, cap 300 Qwen tokens.
+  - **Before encode:** teacher render on ~8 DOCCI-style prompts (10 min GPU) — if Iris cannot
+    look photographic, distillation will not fix it.
+  - Add ~8 photo prompts to fixed preview / eval monitoring.
+- `open-image-preferences` has `category` in HF parquet (incl. Photography) but was not stored in
+  our jsonl; can filter photo category when rebuilding or extending `prepare_prompts.py`.
+
+### Metrics & live dashboard (user: wire UI later; log everything now)
+
+- No wandb in deps (§14). Prior session may have used Autoresearch **`expose_port`** (public HTTPS
+  URL with random hostname) for a custom dashboard — URL dies on `stop_node`; re-expose after wake.
+- Mission page (`open_mission` → `https://autoresearch.sfcompute.com/missions/<name>`) gives GPU,
+  spend, `query_metrics` / `register_scrape` for Prometheus; training series need instrumentation.
+- **Trainer should write extractable files under `--out`:**
+  - `metrics.jsonl` — per turn: kind (fake/gen), `r`, loss, gnorm, v_diff, sigma stats, bucket,
+    epoch, step_time_s, vram peak, lora norms, output x0 std during loss (early collapse signal).
+  - `previews.jsonl` — per preview: raw/ema std, chroma, sharpness, patch-grid score, ratios vs
+    teacher, per-step delta (paper Table 6 style).
+  - `events.jsonl` — rollbacks, sentinel trips, deadline, `/v1/events` notices.
+  - `status.json` — single-file poll target for a future dashboard (step, ETA, health).
+  - Flush each line; PNG grids under `previews/` as today.
+- Stage 9 plan item: `scripts/evaluate.py` while main run runs; export unmerged adapters
+  (`gen` LoRA + `dataspace_branch` weights: `x0_embedder`, `step_embeddings`) — see
+  `src/models/lora.py` / `DataSpaceIris.BRANCH_KEYS`; exact safenames TBD in export script.
+
+### Timeline vs credit (launch gate)
+
+- Realism prep (teacher photo check + filter plumbing + DOCCI append + encode new rows): **~2–3 h**.
+- Main run ~50 h from launch → finish ~Oct 25 22:00 – Oct 26 00:00 UTC if starting Oct 23 evening.
+- Leaves **~12–14 h** for eval/export before promo credit expiry; enough for **one** rollback, not a
+  full second 50 h run. First **250** updates (~6 h) remains the real go/no-go (§20).
+
+### Stage 9 checklist (implementation pending)
+
+- [ ] Fix resume skip, preview indices, teacher-relative sentinel, preview cadence / multi-r
+- [ ] Metrics jsonl + status.json; deadline + metadata events poll
+- [ ] `run_main.sh` + disk-aware checkpoint policy
+- [ ] Prompt keep_indices + DOCCI append + partial cache encode
+- [ ] Teacher photo sanity renders
+- [ ] Detached main: `--steps 2400`, `--warmup 200`, `--ckpt-every 250`, mission URL to human
+- [ ] `scripts/evaluate.py` + safetensor export + `stop_node`
 
 
 ## For me, not for the AI Agent:

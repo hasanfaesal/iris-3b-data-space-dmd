@@ -17,7 +17,11 @@ from __future__ import annotations
 
 import contextlib
 import errno
+import json
+import os
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import torch
@@ -95,7 +99,7 @@ class StdSentinel:
         self.teacher_std, self.collapse_after = teacher_std, collapse_after
         self.low = self.high = 0
 
-    def update(self, std: float, step: int = 0) -> bool:
+    def update(self, std: float, step: int = 0) -> str | None:
         # Static is never a draft. Collapse is: v4 was still ~0.19 at update 50.
         if std > self.max_std:
             self.high += 1
@@ -103,8 +107,16 @@ class StdSentinel:
             self.high = 0
         if step >= self.collapse_after:
             self.low = self.low + 1 if std < self.min_std else 0
-        self.bad = max(self.low, self.high)
-        return self.bad >= self.patience
+        if self.high >= self.patience:
+            return "static"
+        if self.low >= self.patience:
+            return "collapse"
+        return None
+
+
+def rollback_gen_lr(reason: str, current: float) -> float:
+    """Static goes to 5e-6; collapse and a non-finite loss go to 1e-5. Never raises ``current``."""
+    return min(current, 5e-6 if reason == "static" else 1e-5)
 
 
 def _is_gen_param(name: str) -> bool:
@@ -137,10 +149,15 @@ class Trainer:
         self.ema_slow = EMA(self.gen_params, cfg.ema_slow_decay)
         self.gen_updates = 0
         self.fake_updates = 0
+        self.rolled_back = False
         self._gen_up_params = [
             p for n, p in self.gen_params.items()
             if ".adapters.gen.1.weight" in n
         ]
+        self._target_gen_updates: int | None = None
+        self._fit_started: float | None = None
+        self._last_preview: dict | None = None
+        self._health = "ok"
 
     # -- schedule ------------------------------------------------------------------
     @property
@@ -344,7 +361,8 @@ class Trainer:
             "ema": {n: t.cpu() for n, t in self.ema.shadow.items()},
             "ema_slow": {n: t.cpu() for n, t in self.ema_slow.shadow.items()},
             "gen_opt": self.gen_opt.state_dict(), "fake_opt": self.fake_opt.state_dict(),
-            "gen_updates": self.gen_updates, "fake_updates": self.fake_updates, "rng": rng,
+            "gen_updates": self.gen_updates, "fake_updates": self.fake_updates,
+            "rolled_back": self.rolled_back, "rng": rng,
         }
 
     def load_state_dict(self, state: dict) -> None:
@@ -360,6 +378,8 @@ class Trainer:
         self.gen_opt.load_state_dict(state["gen_opt"])
         self.fake_opt.load_state_dict(state["fake_opt"])
         self.gen_updates, self.fake_updates = state["gen_updates"], state["fake_updates"]
+        self.rolled_back = state.get("rolled_back", False)
+        self.cfg.gen_lr = self.gen_opt.param_groups[0]["lr"]
         torch.set_rng_state(state["rng"]["cpu"])
         if "cuda" in state["rng"]:
             torch.cuda.set_rng_state(state["rng"]["cuda"], self.device)
@@ -385,6 +405,65 @@ class Trainer:
             raise ValueError(f"{path} has no optimizer state; resume from checkpoints/last.pt")
         self.load_state_dict(state)
 
+    def _ts(self) -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    def _append_metrics(self, rec: dict) -> None:
+        if not self.out_dir:
+            return
+        path = self.out_dir / "metrics.jsonl"
+        try:
+            self.out_dir.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, separators=(",", ":")) + "\n")
+                f.flush()
+        except OSError as e:
+            if e.errno != errno.ENOSPC:
+                raise
+            print("write skipped: disk full", flush=True)
+
+    def _write_status(self) -> None:
+        if not self.out_dir:
+            return
+        eta_s = None
+        if self._fit_started is not None and self._target_gen_updates and self.gen_updates > 0:
+            elapsed = time.time() - self._fit_started
+            remaining = self._target_gen_updates - self.gen_updates
+            if remaining > 0 and elapsed > 0:
+                eta_s = remaining * (elapsed / self.gen_updates)
+        status = {
+            "ts": self._ts(),
+            "health": self._health,
+            "turn": self.turns,
+            "gen_updates": self.gen_updates,
+            "fake_updates": self.fake_updates,
+            "target_gen_updates": self._target_gen_updates,
+            "eta_s": eta_s,
+            "last_preview": self._last_preview,
+        }
+        path = self.out_dir / "status.json"
+        tmp = path.with_suffix(".json.tmp")
+        try:
+            self.out_dir.mkdir(parents=True, exist_ok=True)
+            tmp.write_text(json.dumps(status, separators=(",", ":")), encoding="utf-8")
+            os.replace(tmp, path)
+        except OSError as e:
+            if e.errno != errno.ENOSPC:
+                raise
+            print("write skipped: disk full", flush=True)
+
+    def _log_turn_metrics(self, kind: str, stats: dict) -> None:
+        rec = {
+            "ts": self._ts(),
+            "kind": "turn",
+            "turn": self.turns,
+            "role": kind,
+            "gen_updates": self.gen_updates,
+            "fake_updates": self.fake_updates,
+            **stats,
+        }
+        self._append_metrics(rec)
+
     # -- loop ----------------------------------------------------------------------------
     def fit(
         self,
@@ -398,14 +477,25 @@ class Trainer:
         """Run until ``total_gen_updates``; ``batches`` yields global batches (already
         advanced past ``self.turns`` when resuming). Returns True unless the sentinel stopped it."""
         c = self.cfg
+        self._target_gen_updates = total_gen_updates
+        self._fit_started = time.time()
+        self._health = "ok"
         for batch in batches:
             if self.gen_updates >= total_gen_updates:
                 break
             if platform_sentinel and (stop_reason := platform_sentinel.check()):
                 log(f"platform stop: {stop_reason}. Saving checkpoint and exiting cleanly.")
+                self._health = "stopped_platform"
+                self._write_status()
                 self._save_full()
                 return True
-            kind, stats = self.turn(batch)
+            try:
+                kind, stats = self.turn(batch)
+            except FloatingPointError as e:
+                log(f"non-finite loss: {e}")
+                if self._on_failure("nan", sentinel, log):
+                    return False
+                continue
             msg = (
                 f"turn {self.turns} {kind} gen={self.gen_updates} fake={self.fake_updates} "
                 f"loss={stats['loss']:.4g} gnorm={stats['grad_norm']:.3g}"
@@ -415,7 +505,9 @@ class Trainer:
             if "lora_up_norm" in stats:
                 msg += f" up_norm={stats['lora_up_norm']:.4f}"
             log(msg)
+            self._log_turn_metrics(kind, stats)
             if kind != "gen":
+                self._write_status()
                 continue
             should_preview = (
                 (isinstance(c.preview_every, (list, tuple, set)) and self.gen_updates in c.preview_every)
@@ -424,22 +516,94 @@ class Trainer:
             if should_preview and fixed_batch is not None:
                 raw_std, ema_std = self.preview(fixed_batch, self.gen_updates)
                 log(f"preview gen={self.gen_updates} raw_pixel_std={raw_std:.4f} ema_pixel_std={ema_std:.4f}")
-                if sentinel and sentinel.update(raw_std, self.gen_updates):
-                    log(f"sentinel: raw pixel std ({raw_std:.4f}) outside bounds [{sentinel.min_std}, {sentinel.max_std}], stopping")
-                    self._save_full()
-                    if c.ckpt_every and self.gen_updates % c.ckpt_every == 0:
-                        self._save_slim()
-                    return False
+                self._last_preview = {
+                    "gen_updates": self.gen_updates,
+                    "raw_pixel_std": raw_std,
+                    "ema_pixel_std": ema_std,
+                }
+                preview_rec = {
+                    "ts": self._ts(),
+                    "kind": "preview",
+                    "gen_updates": self.gen_updates,
+                    "raw_pixel_std": raw_std,
+                    "ema_pixel_std": ema_std,
+                }
+                if sentinel and sentinel.teacher_std:
+                    preview_rec["raw_to_teacher"] = raw_std / sentinel.teacher_std
+                    preview_rec["ema_to_teacher"] = ema_std / sentinel.teacher_std
+                self._append_metrics(preview_rec)
+                reason = sentinel.update(raw_std, self.gen_updates) if sentinel else None
+                if reason:
+                    log(f"sentinel: raw pixel std {raw_std:.4f} -> {reason}")
+                    if self._on_failure(reason, sentinel, log):
+                        if c.ckpt_every and self.gen_updates % c.ckpt_every == 0:
+                            self._save_slim()
+                        return False
+                    continue  # restored weights; don't checkpoint the preview that just failed
                 if sentinel and self.gen_updates < sentinel.collapse_after and raw_std < sentinel.min_std:
                     log(
                         f"sentinel: raw pixel std {raw_std:.4f} < {sentinel.min_std:.4f}, "
                         f"collapse check arms at gen {sentinel.collapse_after}"
                     )
+                elif sentinel is None or sentinel.min_std <= raw_std <= sentinel.max_std:
+                    self._save_good()
             if c.rolling_every and self.gen_updates % c.rolling_every == 0:
                 self._save_full()
             if c.ckpt_every and self.gen_updates % c.ckpt_every == 0:
                 self._save_slim()
+            self._write_status()
+        self._health = "complete"
+        self._write_status()
         return True
+
+    def _set_gen_lr(self, lr: float) -> None:
+        self.cfg.gen_lr = lr
+        for group in self.gen_opt.param_groups:
+            group["lr"] = lr
+
+    def _save_good(self) -> None:
+        """Last preview whose pixel std was inside the sentinel bounds. Rollback restores this."""
+        if not self.out_dir:
+            return
+        path = self.out_dir / "checkpoints" / "last_good.pt"
+        if self.save(path):
+            print(f"healthy checkpoint {path}", flush=True)
+
+    def _on_failure(self, reason: str, sentinel: StdSentinel | None, log) -> bool:
+        """Restore the last healthy preview once and lower the generator LR. Returns True to stop.
+
+        Static goes to 5e-6. Collapse and a non-finite loss go to 1e-5. The critic LR stays.
+        A second trip leaves the restored checkpoint on disk and stops.
+        """
+        self.gen_opt.zero_grad(set_to_none=True)
+        self.fake_opt.zero_grad(set_to_none=True)
+        good = self.out_dir / "checkpoints" / "last_good.pt" if self.out_dir else None
+        if self.rolled_back or good is None or not good.is_file():
+            why = "second failure" if self.rolled_back else "no healthy checkpoint"
+            log(f"sentinel: {reason} ({why}), stopping")
+            self._health = "stopped_sentinel"
+            self._append_metrics({"ts": self._ts(), "kind": "stop", "reason": reason, "gen_updates": self.gen_updates})
+            self._write_status()
+            if not self.rolled_back:  # don't replace the restored checkpoint with the weights that just failed
+                self._save_full()
+            return True
+        new_lr = rollback_gen_lr(reason, self.cfg.gen_lr)
+        log(f"rollback: {reason}, gen_lr {self.cfg.gen_lr:g} -> {new_lr:g}, restoring {good.name}")
+        self.load(good)
+        self._set_gen_lr(new_lr)
+        self.rolled_back = True
+        if sentinel is not None:
+            sentinel.low = sentinel.high = 0
+        log(f"rollback: restored gen={self.gen_updates} fake={self.fake_updates}")
+        self._health = "rolled_back"
+        self._append_metrics({
+            "ts": self._ts(), "kind": "rollback", "reason": reason,
+            "gen_lr": new_lr, "gen_updates": self.gen_updates, "fake_updates": self.fake_updates,
+        })
+        self._write_status()
+        self._save_full()
+        self._save_good()  # carries rolled_back, so a resume cannot roll back a second time
+        return False
 
     def _save_full(self) -> None:
         if not self.out_dir:
