@@ -16,6 +16,7 @@ one global batch; after ``warmup`` fake-only turns the pattern is
 from __future__ import annotations
 
 import contextlib
+import errno
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,7 +45,8 @@ class TrainConfig:
     cfg_scale: float = 3.0
     cfg_window: float = 1.0  # shifted sigma' upper bound for CFG; 1.0 = every row
     preview_every: int | list[int] | set[int] = 50  # generator updates; 0 disables, or list of steps
-    ckpt_every: int = 250  # generator updates; 0 disables
+    ckpt_every: int = 250  # slim gen+EMA file; 0 disables
+    rolling_every: int = 100  # overwrite checkpoints/last.pt; 0 disables
 
 
 class EMA:
@@ -85,17 +87,23 @@ class StdSentinel:
         patience: int = 2,
         teacher_std: float | None = None,
         ratio: float = 0.6,
+        collapse_after: int = 0,
     ):
         if min_std is None:
             min_std = ratio * teacher_std if teacher_std is not None else 0.2
-        self.min_std, self.max_std, self.patience, self.bad = min_std, max_std, patience, 0
-        self.teacher_std = teacher_std
+        self.min_std, self.max_std, self.patience = min_std, max_std, patience
+        self.teacher_std, self.collapse_after = teacher_std, collapse_after
+        self.low = self.high = 0
 
-    def update(self, std: float) -> bool:
-        if std < self.min_std or std > self.max_std:
-            self.bad += 1
+    def update(self, std: float, step: int = 0) -> bool:
+        # Static is never a draft. Collapse is: v4 was still ~0.19 at update 50.
+        if std > self.max_std:
+            self.high += 1
         else:
-            self.bad = 0
+            self.high = 0
+        if step >= self.collapse_after:
+            self.low = self.low + 1 if std < self.min_std else 0
+        self.bad = max(self.low, self.high)
         return self.bad >= self.patience
 
 
@@ -237,42 +245,55 @@ class Trainer:
                     steps_imgs[step_idx].append(all_steps[step_idx + 1].float().cpu())
         return [((torch.cat(imgs) + 1) / 2).clamp(0, 1) for imgs in steps_imgs]
 
-    def render_teacher(self, batch, seed: int = 0, steps: int = 20, cfg_scale: float = 4.0, shift: float = 3.0) -> float:
-        """Render fixed batch with the teacher once at startup using FlowDPMSolver.
+    @torch.no_grad()
+    def render_teacher(self, batch, seed: int = 0, steps: int = 20, cfg_scale: float | None = None, shift: float = 3.0) -> float:
+        """20-step teacher on the preview batch, one micro-batch at a time.
 
-        Returns the mean per-image pixel std of the teacher samples (in [0, 1]).
+        cfg defaults to the training guidance. Returns mean per-image pixel std on [0, 1].
         """
         from PIL import Image
         from iris3b.flow.solver import FlowDPMSolver
 
+        cfg_scale = self.cfg.cfg_scale if cfg_scale is None else cfg_scale
         h, w = batch["hw"]
-        num_rows = batch["y"].shape[0]
         g = torch.Generator(device=self.device).manual_seed(seed)
-        z = torch.randn(num_rows, 3, h, w, device=self.device, generator=g)
+        stds, imgs = [], []
+        was_training = self.model.training
+        self.model.eval()  # Iris checkpoints only while training; a 20-step graph OOMs
+        try:
+            y_all, mask_all = batch["y"], batch["y_mask"]
+            for s in range(0, y_all.shape[0], self.cfg.micro_batch):
+                y = y_all[s : s + self.cfg.micro_batch].to(self.device)
+                mask = mask_all[s : s + self.cfg.micro_batch].to(self.device)
+                b = y.shape[0]
+                z = torch.randn(b, 3, h, w, device=self.device, generator=g).float()
+                null = self.null.expand(b, -1, -1, -1)
+                cfg_mask = torch.cat([self.null_mask.expand(b, -1), mask])
 
-        y = batch["y"].to(self.device)
-        mask = batch["y_mask"].to(self.device)
-        null = self.null.expand(num_rows, -1, -1, -1)
-        null_mask = self.null_mask.expand(num_rows, -1)
-        cfg_mask = torch.cat([null_mask, mask])
+                def model_fn(x, t, cond, y=y, mask=mask, cfg_mask=cfg_mask):
+                    m = mask if cond is y else cfg_mask
+                    with self._autocast(), use_adapter(self.model, "off"):
+                        return self.model(x, t, cond, y_mask=m).x.float()
 
-        def model_fn(x, t, cond):
-            m = mask if cond is y else cfg_mask
-            with self._autocast(), use_adapter(self.model, "off"):
-                return self.model(x, t, cond, y_mask=m).x.float()
-
-        solver = FlowDPMSolver(model_fn, num_timesteps=1000, cfg_scale=cfg_scale, prediction="v")
-        sample = solver.sample(z, y, null if cfg_scale != 1.0 else None, steps=steps, order=2, shift=shift).clamp(-1, 1)
-        img = ((sample.float().cpu() + 1) / 2).clamp(0, 1)
-        teacher_std = img.flatten(1).std(1).mean().item()
-
+                solver = FlowDPMSolver(model_fn, num_timesteps=1000, cfg_scale=cfg_scale, prediction="v")
+                sample = solver.sample(
+                    z, y, null if cfg_scale != 1.0 else None, steps=steps, order=2, shift=shift
+                ).clamp(-1, 1)
+                img = ((sample.float().cpu() + 1) / 2).clamp(0, 1)
+                stds.append(img.flatten(1).std(1))
+                imgs.append(img)
+        finally:
+            self.model.train(was_training)
+        img = torch.cat(imgs)
         if self.out_dir:
-            d_teacher = self.out_dir / "previews" / "teacher"
-            d_teacher.mkdir(parents=True, exist_ok=True)
-            for i, x in enumerate(img):
-                Image.fromarray((x.permute(1, 2, 0) * 255).round().byte().numpy()).save(d_teacher / f"{i:02d}.png")
+            def dump() -> None:
+                d_teacher = self.out_dir / "previews" / "teacher"
+                d_teacher.mkdir(parents=True, exist_ok=True)
+                for i, x in enumerate(img):
+                    Image.fromarray((x.permute(1, 2, 0) * 255).round().byte().numpy()).save(d_teacher / f"{i:02d}.png")
 
-        return teacher_std
+            _skip_if_full(dump)
+        return torch.cat(stds).mean().item()
 
     @torch.no_grad()
     def preview(self, batch, step: int, seed: int = 0) -> tuple[float, float]:
@@ -292,20 +313,23 @@ class Trainer:
         ema_std = steps_ema[-1].flatten(1).std(1).mean().item()
 
         if self.out_dir:
-            d_raw = self.out_dir / "previews" / f"step{step:06d}_raw"
-            d_ema = self.out_dir / "previews" / f"step{step:06d}_ema"
-            d_raw.mkdir(parents=True, exist_ok=True)
-            d_ema.mkdir(parents=True, exist_ok=True)
-            for r_idx, x_step in enumerate(steps_raw):
-                for i, img in enumerate(x_step):
-                    Image.fromarray((img.permute(1, 2, 0) * 255).round().byte().numpy()).save(
-                        d_raw / f"{i:02d}_r{r_idx}.png"
-                    )
-            for r_idx, x_step in enumerate(steps_ema):
-                for i, img in enumerate(x_step):
-                    Image.fromarray((img.permute(1, 2, 0) * 255).round().byte().numpy()).save(
-                        d_ema / f"{i:02d}_r{r_idx}.png"
-                    )
+            def dump() -> None:
+                d_raw = self.out_dir / "previews" / f"step{step:06d}_raw"
+                d_ema = self.out_dir / "previews" / f"step{step:06d}_ema"
+                d_raw.mkdir(parents=True, exist_ok=True)
+                d_ema.mkdir(parents=True, exist_ok=True)
+                for r_idx, x_step in enumerate(steps_raw):
+                    for i, img in enumerate(x_step):
+                        Image.fromarray((img.permute(1, 2, 0) * 255).round().byte().numpy()).save(
+                            d_raw / f"{i:02d}_r{r_idx}.png"
+                        )
+                for r_idx, x_step in enumerate(steps_ema):
+                    for i, img in enumerate(x_step):
+                        Image.fromarray((img.permute(1, 2, 0) * 255).round().byte().numpy()).save(
+                            d_ema / f"{i:02d}_r{r_idx}.png"
+                        )
+
+            _skip_if_full(dump)
 
         return raw_std, ema_std
 
@@ -340,20 +364,47 @@ class Trainer:
         if "cuda" in state["rng"]:
             torch.cuda.set_rng_state(state["rng"]["cuda"], self.device)
 
-    def save(self, path) -> None:
-        save_checkpoint(self.state_dict(), path)
+    def state_dict_slim(self) -> dict:
+        """Generator weights plus the fast EMA. The slow EMA and optimizer stay in ``last.pt``."""
+        cpu = lambda params: {n: p.detach().cpu() for n, p in params.items()}  # noqa: E731
+        return {
+            "gen": cpu(self.gen_params),
+            "ema": {n: t.cpu() for n, t in self.ema.shadow.items()},
+            "gen_updates": self.gen_updates,
+        }
+
+    def save(self, path) -> bool:
+        return save_checkpoint(self.state_dict(), path)
+
+    def save_slim(self, path) -> bool:
+        return save_checkpoint(self.state_dict_slim(), path)
 
     def load(self, path) -> None:
-        self.load_state_dict(load_checkpoint(path))
+        state = load_checkpoint(path)
+        if "gen_opt" not in state or "fake" not in state:
+            raise ValueError(f"{path} has no optimizer state; resume from checkpoints/last.pt")
+        self.load_state_dict(state)
 
     # -- loop ----------------------------------------------------------------------------
-    def fit(self, batches, total_gen_updates: int, fixed_batch=None, sentinel: StdSentinel | None = None, log=print):
+    def fit(
+        self,
+        batches,
+        total_gen_updates: int,
+        fixed_batch=None,
+        sentinel: StdSentinel | None = None,
+        platform_sentinel=None,
+        log=print,
+    ):
         """Run until ``total_gen_updates``; ``batches`` yields global batches (already
         advanced past ``self.turns`` when resuming). Returns True unless the sentinel stopped it."""
         c = self.cfg
         for batch in batches:
             if self.gen_updates >= total_gen_updates:
                 break
+            if platform_sentinel and (stop_reason := platform_sentinel.check()):
+                log(f"platform stop: {stop_reason}. Saving checkpoint and exiting cleanly.")
+                self._save_full()
+                return True
             kind, stats = self.turn(batch)
             msg = (
                 f"turn {self.turns} {kind} gen={self.gen_updates} fake={self.fake_updates} "
@@ -373,14 +424,42 @@ class Trainer:
             if should_preview and fixed_batch is not None:
                 raw_std, ema_std = self.preview(fixed_batch, self.gen_updates)
                 log(f"preview gen={self.gen_updates} raw_pixel_std={raw_std:.4f} ema_pixel_std={ema_std:.4f}")
-                if sentinel and sentinel.update(raw_std):
+                if sentinel and sentinel.update(raw_std, self.gen_updates):
                     log(f"sentinel: raw pixel std ({raw_std:.4f}) outside bounds [{sentinel.min_std}, {sentinel.max_std}], stopping")
-                    self._save_ckpt()
+                    self._save_full()
+                    if c.ckpt_every and self.gen_updates % c.ckpt_every == 0:
+                        self._save_slim()
                     return False
+                if sentinel and self.gen_updates < sentinel.collapse_after and raw_std < sentinel.min_std:
+                    log(
+                        f"sentinel: raw pixel std {raw_std:.4f} < {sentinel.min_std:.4f}, "
+                        f"collapse check arms at gen {sentinel.collapse_after}"
+                    )
+            if c.rolling_every and self.gen_updates % c.rolling_every == 0:
+                self._save_full()
             if c.ckpt_every and self.gen_updates % c.ckpt_every == 0:
-                self._save_ckpt()
+                self._save_slim()
         return True
 
-    def _save_ckpt(self) -> None:
-        if self.out_dir:
-            self.save(self.out_dir / "checkpoints" / f"gen{self.gen_updates:06d}.pt")
+    def _save_full(self) -> None:
+        if not self.out_dir:
+            return
+        path = self.out_dir / "checkpoints" / "last.pt"
+        if self.save(path):
+            print(f"full checkpoint {path}", flush=True)
+
+    def _save_slim(self) -> None:
+        if not self.out_dir:
+            return
+        path = self.out_dir / "checkpoints" / f"gen{self.gen_updates:06d}.pt"
+        if self.save_slim(path):
+            print(f"slim checkpoint {path}", flush=True)
+
+
+def _skip_if_full(fn) -> None:
+    try:
+        fn()
+    except OSError as e:
+        if e.errno != errno.ENOSPC:
+            raise
+        print("write skipped: disk full", flush=True)

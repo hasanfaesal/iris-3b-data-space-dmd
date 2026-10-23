@@ -1,6 +1,9 @@
 """Stage 6 checks: 20-turn CPU run, schedule, live adapters, exact resume, sentinel."""
 
+import importlib.util
 import itertools
+import json
+from pathlib import Path
 
 import torch
 
@@ -72,6 +75,51 @@ def test_save_resume_reproduces_next_steps_exactly(tmp_path):
         assert all(torch.equal(sa[group][n], sb[group][n]) for n in sa[group]), group
 
 
+def _train_script():
+    path = Path(__file__).resolve().parents[1] / "scripts" / "train.py"
+    spec = importlib.util.spec_from_file_location("train_main", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_preview_rows_match_eval_file(tmp_path):
+    mod = _train_script()
+    prompts = Path(__file__).resolve().parents[1] / "data" / "prompts_eval.jsonl"
+    rows = [json.loads(line)["prompt"] for line in prompts.read_text().splitlines() if line.strip()]
+    for i, text in mod.PREVIEW_ROWS:
+        assert rows[i] == text and i < 100
+
+    class Cache:
+        dir = tmp_path
+        n = 200
+
+        def get(self, indices):
+            self.got = list(indices)
+            return torch.zeros(len(indices), 1), torch.zeros(len(indices))
+
+    (tmp_path / "index.json").write_text(json.dumps({"sha256": mod._sha256(prompts), "n": 200}))
+    batch = mod.load_preview_batch(Cache(), prompts)
+    assert batch["hw"] == (1024, 1024) and batch["y"].shape[0] == len(mod.PREVIEW_ROWS)
+    (tmp_path / "index.json").write_text(json.dumps({"sha256": "0", "n": 200}))
+    try:
+        mod.load_preview_batch(Cache(), prompts)
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("stale eval cache should abort")
+
+
+def test_sentinel_ignores_draft_collapse_and_still_catches_static():
+    sentinel = StdSentinel(teacher_std=0.30, ratio=0.6, patience=2, max_std=0.40, collapse_after=100)
+    assert not sentinel.update(0.10, 50) and sentinel.low == 0
+    assert not sentinel.update(0.10, 100)
+    assert sentinel.update(0.10, 150)
+    static = StdSentinel(teacher_std=0.30, ratio=0.6, patience=2, max_std=0.40, collapse_after=100)
+    assert not static.update(0.50, 50)
+    assert static.update(0.50, 100)
+
+
 def test_sentinel_teacher_ratio_and_patience():
     # 0.6 * teacher_std (0.30 -> 0.18)
     sentinel = StdSentinel(teacher_std=0.30, ratio=0.6, patience=2, max_std=0.40)
@@ -97,7 +145,12 @@ def test_fit_preview_sentinel_and_checkpoints(tmp_path):
     done = tr.fit(batches(), total_gen_updates=5, fixed_batch=batch_at(99), sentinel=sentinel, log=lambda _: None)
     assert done is False and tr.gen_updates == 2
     assert len(list((tmp_path / "previews").rglob("*.png"))) == 32  # 4 rows x 2 previews x 2 steps x 2 (raw + ema)
-    assert (tmp_path / "checkpoints" / "gen000002.pt").exists()
+    full = tmp_path / "checkpoints" / "last.pt"
+    stopped = tmp_path / "checkpoints" / "gen000002.pt"
+    assert full.is_file() and stopped.is_file()
+    state = torch.load(full, map_location="cpu", weights_only=False)
+    assert "gen_opt" in state and "fake" in state
+    assert "gen_opt" not in torch.load(stopped, map_location="cpu", weights_only=False)
 
 
 def test_every_r_trained_when_batch_has_fewer_microbatches_than_steps():
@@ -110,6 +163,65 @@ def test_every_r_trained_when_batch_has_fewer_microbatches_than_steps():
     assert seen == {0, 1, 2, 3}
 
 
+def test_one_rolling_full_and_slim_without_optimizer(tmp_path):
+    from dataclasses import replace
+
+    tr = make_trainer(tmp_path)
+    tr.cfg = replace(tr.cfg, rolling_every=1, ckpt_every=2, preview_every=0)
+    assert tr.fit(batches(), total_gen_updates=2, log=lambda _: None)
+    ckpt = tmp_path / "checkpoints"
+    assert {p.name for p in ckpt.glob("*.pt")} == {"last.pt", "gen000002.pt"}
+    full = torch.load(ckpt / "last.pt", map_location="cpu", weights_only=False)
+    slim = torch.load(ckpt / "gen000002.pt", map_location="cpu", weights_only=False)
+    assert "gen_opt" in full and "fake_opt" in full and "ema_slow" in full
+    assert set(slim) == {"gen", "ema", "gen_updates"} and slim["gen_updates"] == 2
+    other = make_trainer()
+    try:
+        other.load(ckpt / "gen000002.pt")
+    except ValueError as e:
+        assert "last.pt" in str(e)
+    else:
+        raise AssertionError("slim checkpoint must not resume")
+
+
+def test_checkpoint_skips_when_disk_is_full(tmp_path, monkeypatch):
+    import errno
+
+    import src.utils.checkpoint as ckpt
+
+    nested = {"a": torch.zeros(4), "b": {"c": torch.zeros(4)}}
+    assert ckpt.tensor_bytes(nested) == 32
+
+    monkeypatch.setattr(ckpt.shutil, "disk_usage", lambda _p: type("U", (), {"free": 0})())
+    assert ckpt.save_checkpoint({"w": torch.zeros(8)}, tmp_path / "a.pt") is False
+    assert not (tmp_path / "a.pt").exists()
+
+    monkeypatch.setattr(ckpt.shutil, "disk_usage", lambda _p: type("U", (), {"free": 1 << 40})())
+
+    def boom(_state, path):
+        Path(path).write_bytes(b"partial")
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(ckpt.torch, "save", boom)
+    assert ckpt.save_checkpoint({"w": torch.zeros(4)}, tmp_path / "b.pt") is False
+    assert not (tmp_path / "b.pt").exists() and not (tmp_path / "b.pt.tmp").exists()
+
+
+def test_drop_diagnostic_runs_keeps_the_current_out(tmp_path):
+    mod = _train_script()
+    runs = tmp_path / "runs"
+    (runs / "diagnostic_v4" / "checkpoints").mkdir(parents=True)
+    (runs / "diagnostic_v4" / "checkpoints" / "last.pt").write_bytes(b"x")
+    (runs / "main").mkdir()
+    (runs / "keepme").mkdir()
+    mod.drop_diagnostic_runs(runs, runs / "main")
+    assert not (runs / "diagnostic_v4").exists()
+    assert (runs / "main").is_dir() and (runs / "keepme").is_dir()
+    (runs / "diagnostic_v5").mkdir()
+    mod.drop_diagnostic_runs(runs, runs / "diagnostic_v5")
+    assert (runs / "diagnostic_v5").is_dir()
+
+
 def test_ema_warmup_tracks_early_updates():
     """Step 0 copies the live weight (decay 0.1 at most); late steps cap at cfg decay."""
     p = {"w": torch.nn.Parameter(torch.zeros(1))}
@@ -120,3 +232,30 @@ def test_ema_warmup_tracks_early_updates():
     ema.shadow["w"].zero_()
     ema.update(10**6)
     assert abs(ema.shadow["w"].item() - 0.001) < 1e-6
+
+
+def test_platform_sentinel_deadline_and_clean_exit(tmp_path):
+    from src.utils.platform import PlatformSentinel, parse_deadline
+
+    # Test parser
+    assert parse_deadline(None) is None
+    ts = parse_deadline("2026-10-26T06:53:00+00:00")
+    assert ts is not None and parse_deadline("2026-10-26 06:53:00 UTC") == ts
+
+    # Triggered deadline
+    ps = PlatformSentinel(deadline=100.0, check_interval=0)
+    assert ps.check(now=101.0) is not None
+
+    # Untriggered deadline
+    ps = PlatformSentinel(deadline=200.0, check_interval=0)
+    assert ps.check(now=101.0) is None
+
+    # Trainer fit clean exit on platform sentinel
+    tr = make_trainer(tmp_path)
+    tr.cfg.ckpt_every = 100
+    mock_sentinel = PlatformSentinel(deadline=50.0, check_interval=0)
+    # mock_sentinel check will immediately trigger at now=100.0
+    mock_sentinel.check = lambda: "test deadline reached"
+    ok = tr.fit(batches(), total_gen_updates=10, platform_sentinel=mock_sentinel, log=lambda _: None)
+    assert ok is True  # platform early stop is clean exit
+    assert (tmp_path / "checkpoints" / "last.pt").is_file()

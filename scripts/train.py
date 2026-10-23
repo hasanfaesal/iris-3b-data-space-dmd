@@ -5,7 +5,11 @@
 """
 
 import argparse
+import hashlib
 import itertools
+import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -15,6 +19,86 @@ sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).res
 
 from src.engine.trainer import StdSentinel, TrainConfig, Trainer  # noqa: E402
 from src.models.lora import inject_lora  # noqa: E402
+
+# Concrete held-out Parti rows. prompts_eval.jsonl starts with one-word abstract
+# prompts; those are a bad std baseline. Indices stay < 100.
+PREVIEW_ROWS = (
+    (5, "a shiba inu"),
+    (11, "a corgi"),
+    (18, "a cat"),
+    (23, "a horse"),
+    (36, "a chair"),
+    (46, "a laptop"),
+    (54, "a coffee mug"),
+    (66, "A bowl of Pho"),
+    (72, "a roast turkey"),
+    (84, "a kitchen"),
+    (87, "a living room"),
+    (88, "a fall landscape"),
+    (90, "a city"),
+    (94, "a street"),
+    (95, "a house"),
+    (96, "a city intersection"),
+)
+COLLAPSE_AFTER = 100  # v4 mean std was still ~0.19 at update 50
+
+
+def log_disk(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    free = shutil.disk_usage(path).free
+    print(f"disk free {free / 2**30:.1f} GiB at {path}", flush=True)
+    # last.pt ~7 GiB (needs a second copy while writing) + ~16 GiB of slim snapshots + previews.
+    if free < 40 << 30:
+        print(
+            "warning: under 40 GiB free. Refreshing last.pt needs ~7 GiB free on top of the "
+            "file itself; nine slim snapshots are ~16 GiB. A save that would fill the disk is skipped.",
+            flush=True,
+        )
+    subprocess.run(["df", "-h", str(path)], check=False)
+
+
+def drop_diagnostic_runs(runs: Path, keep: Path) -> None:
+    """Delete leftover ``runs/diagnostic*`` trees. ``keep`` is the directory this launch writes."""
+    if not runs.is_dir():
+        return
+    keep = keep.resolve()
+    for p in list(runs.glob("diagnostic*")):
+        resolved = p.resolve()
+        if resolved == keep or keep.is_relative_to(resolved):
+            continue
+        if p.is_dir():
+            shutil.rmtree(p)
+        else:
+            p.unlink()
+        print(f"removed {p}", flush=True)
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def load_preview_batch(eval_cache, prompts_path: Path):
+    """Fixed eval rows. Exits if the cache was built from a different prompt file."""
+    if not prompts_path.is_file():
+        raise SystemExit(f"missing {prompts_path}")
+    index_path = Path(eval_cache.dir) / "index.json"
+    index = json.loads(index_path.read_text())
+    digest = _sha256(prompts_path)
+    if index.get("sha256") != digest:
+        raise SystemExit(
+            f"{eval_cache.dir} was not built from {prompts_path} "
+            f"(cache {index.get('sha256')} != file {digest}). Recache eval embeddings."
+        )
+    rows = [json.loads(line)["prompt"] for line in prompts_path.read_text().splitlines() if line.strip()]
+    bad = [f"{i}:{text}" for i, text in PREVIEW_ROWS if i >= eval_cache.n or i >= len(rows) or rows[i] != text]
+    if bad:
+        raise SystemExit(f"preview rows missing or moved: {bad}")
+    y, mask = eval_cache.get([i for i, _ in PREVIEW_ROWS])
+    return {"y": y, "y_mask": mask, "hw": (1024, 1024)}
 
 
 def build_tiny():
@@ -68,7 +152,8 @@ def main():
     ap.add_argument("--eval-cache", default=None, help="eval embedding cache dir (defaults to <cache>_eval)")
     ap.add_argument("--steps", type=int, default=2400, help="generator updates")
     ap.add_argument("--preview-every", default="50", help="preview frequency in gen updates, or comma-separated steps (e.g. 10,20,40,60)")
-    ap.add_argument("--ckpt-every", type=int, default=250, help="checkpoint frequency in gen updates")
+    ap.add_argument("--ckpt-every", type=int, default=250, help="slim gen+EMA snapshot every N gen updates (0 disables)")
+    ap.add_argument("--rolling-every", type=int, default=100, help="overwrite checkpoints/last.pt every N gen updates (0 disables)")
     ap.add_argument("--warmup", type=int, default=200, help="fake warmup updates")
     ap.add_argument("--fake-per-gen", type=int, default=4, help="critic updates per generator update")
     ap.add_argument("--overfit", type=int, default=0, help="overfit on first N prompts in cache")
@@ -82,7 +167,22 @@ def main():
     ap.add_argument("--min-std", type=float, default=None, help="sentinel floor (default: 0.6 * teacher pixel std)")
     ap.add_argument("--std-ratio", type=float, default=0.6, help="sentinel collapse ratio relative to teacher std")
     ap.add_argument("--max-std", type=float, default=0.4, help="sentinel ceiling; abort on static explosion")
+    ap.add_argument(
+        "--deadline",
+        default="2026-10-26T06:53:00+00:00",
+        help="UTC deadline ISO string or epoch seconds to save and exit cleanly before credit expiry",
+    )
+    ap.add_argument(
+        "--events-interval",
+        type=float,
+        default=120.0,
+        help="seconds between Givemeanode /v1/events checks (0 to disable)",
+    )
     args = ap.parse_args()
+    out = Path(args.out)
+    if not args.tiny:
+        drop_diagnostic_runs(Path(__file__).resolve().parents[1] / "runs", out)
+    log_disk(out)
 
     preview_every = (
         {int(x) for x in args.preview_every.split(",")}
@@ -109,18 +209,17 @@ def main():
         else:
             from src.data.embed_cache import EmbedCache
             eval_dir = Path(args.eval_cache) if args.eval_cache else (Path(args.cache).parent / (Path(args.cache).name + "_eval"))
-            if eval_dir.exists():
-                eval_cache = EmbedCache(str(eval_dir))
-                n_preview = min(4, eval_cache.n)
-                preview_y, preview_mask = eval_cache.get(list(range(n_preview)))
-                fixed = {"y": preview_y, "y_mask": preview_mask, "hw": (1024, 1024)}
-            else:
-                fixed = next(batches(10**6))
+            if not (eval_dir / "index.json").is_file():
+                raise SystemExit(f"eval embedding cache not found at {eval_dir}. Refusing to preview a training batch.")
+            fixed = load_preview_batch(
+                EmbedCache(str(eval_dir)), Path(__file__).resolve().parents[1] / "data" / "prompts_eval.jsonl"
+            )
         cfg = TrainConfig(
             warmup=args.warmup,
             fake_per_gen=args.fake_per_gen,
             preview_every=preview_every,
             ckpt_every=args.ckpt_every,
+            rolling_every=args.rolling_every,
         )
     inject_lora(model, "gen", 128 if not args.tiny else 8)
     inject_lora(model, "fake", 128 if not args.tiny else 4)
@@ -132,11 +231,8 @@ def main():
     teacher_std = None
     if not args.tiny:
         print("Rendering teacher preview baseline...", flush=True)
-        try:
-            teacher_std = trainer.render_teacher(fixed)
-            print(f"Teacher preview pixel std: {teacher_std:.4f}", flush=True)
-        except Exception as e:
-            print(f"Warning: teacher preview baseline failed ({e}), falling back to default min_std", flush=True)
+        teacher_std = trainer.render_teacher(fixed)
+        print(f"Teacher preview pixel std: {teacher_std:.4f} (cfg={cfg.cfg_scale})", flush=True)
 
     sentinel = StdSentinel(
         min_std=args.min_std,
@@ -144,16 +240,31 @@ def main():
         patience=2,
         teacher_std=teacher_std,
         ratio=args.std_ratio,
+        collapse_after=0 if args.tiny else COLLAPSE_AFTER,
     )
     print(
-        f"StdSentinel active: bounds=[{sentinel.min_std:.4f}, {sentinel.max_std:.4f}], patience={sentinel.patience}"
+        f"StdSentinel active: bounds=[{sentinel.min_std:.4f}, {sentinel.max_std:.4f}], "
+        f"patience={sentinel.patience}, collapse_after={sentinel.collapse_after}"
         + (f" (teacher_std={teacher_std:.4f})" if teacher_std is not None else ""),
         flush=True,
     )
 
+    from src.utils.platform import PlatformSentinel, parse_deadline
+
+    deadline_ts = parse_deadline(args.deadline)
+    platform_sentinel = PlatformSentinel(deadline=deadline_ts, check_interval=args.events_interval)
+    if deadline_ts:
+        print(f"PlatformSentinel active: deadline={args.deadline} (ts={deadline_ts}), events_interval={args.events_interval}s", flush=True)
+
     stream = batches(trainer.turns)  # resume: skip the batches already consumed
-    ok = trainer.fit(stream, args.steps, fixed_batch=fixed, sentinel=sentinel)
-    trainer.save(Path(args.out) / "checkpoints" / "last.pt")
+    ok = trainer.fit(
+        stream,
+        args.steps,
+        fixed_batch=fixed,
+        sentinel=sentinel,
+        platform_sentinel=platform_sentinel,
+    )
+    trainer._save_full()
     sys.exit(0 if ok else 2)
 
 
