@@ -80,9 +80,9 @@ All line refs are to the vendored files. `NOTES` guesses from IMPLEMENT.md are m
 
 - `FlowSchedule(1000, shift=4.0)`: sigma grid `1 - linspace(1.0, 0.001, 1000)`, then
   `sigma' = shift*sigma / (1 + (shift-1)*sigma)`; `t_model = 1000 * sigma'`.
-- Base training samples `timestep_idx` via logit-normal (`flow/timesteps.py`). Our data-space recipe instead
-  samples tau ~ Beta(2.5, 1) (pre-shift), then renoises with the SHIFTED sigma' and conditions t = 1000*sigma'
-  (matches `RectifiedFlow.add_noise` semantics). Raw-vs-shifted window question settled in Stage 4.
+- Base training samples `timestep_idx` via logit-normal (`flow/timesteps.py`). DMD renoise (Eq. 9): draw
+  `u ~ Uniform(0.02, 0.98)`, `sigma' = shift_sigma(u, 4.0)`, condition on `t = 1000*sigma'` (see §24;
+  superseded Beta-then-shift, which double-skewed high noise).
 - Windowed teacher CFG is a native mechanism: `FlowDPMSolver` applies CFG only when `lo < t' < hi`
   (`flow/solver.py:57-59`), `sample.cfg_interval` default `[0.0, 1.0]` (`config.py:501`). IMPLEMENT.md's
   "CFG only when tau <= 0.6" = interval `(0.0, 0.6)` (window on the shifted sigma, same convention as the solver).
@@ -149,10 +149,10 @@ with torch.autocast("cuda", dtype=torch.bfloat16):
 
 - Rollout (Eq. 8): r uniform in {0..R-1} per global batch; r no-grad steps then ONE grad step;
   z fixed at every step; t pinned to 1000.0.
-- Renoise (Eq. 9): fresh independent eps + tau per loss; x_tau = (1-sigma')x0 + sigma'eps with
-  sigma' = shift_sigma(tau, 4.0); model conditioned on t = 1000*sigma'.
-- tau ~ Beta(2.5, 1) raw, shifted through Iris's shift, clamped to [0.02, 0.98] AFTER the shift
-  (PLAN.md's convention; raw-vs-shifted settled: shift, because Iris conditions on shifted levels).
+- Renoise (Eq. 9): fresh independent eps per loss; x_tau = (1-sigma')x0 + sigma'eps;
+  `u ~ Uniform(0.02, 0.98)` then `sigma' = shift_sigma(u, 4.0)`; model conditioned on t = 1000*sigma'
+  (`sample_shifted_sigma` in `src/engine/rollout.py`; §24). Paper uses Beta(2.5, 1) without Iris shift
+  (latent 256²); we keep shift 4.0 because Iris trains at that resolution law.
 - Gen loss (Eq. 10) w(tau)=1: `(x0 * sg[v_pos - v_fake]).flatten(1).sum(1).mean()`; direction
   detached; sum over pixels per IMPLEMENT.md.
 - Fake loss (Eq. 11): MSE(v_fake(x_tau, sigma', c, r), eps - x0), mean-reduction (Adam makes
@@ -390,19 +390,13 @@ Go/no-go:
     haze as the student previews.
   - cfg=3.0: 02 → 0.264 / 0.402; 04 → 0.288 / 0.279.
   - cfg=4.0: 02 → 0.308 / 0.458; 04 → 0.305 / 0.276 (= §21).
-- Verdict: the student's haze IS the unguided teacher. Beta(2.5, 1) + shift 4.0 puts ~96%
-  of training rows at sigma' > 0.6, outside our cfg_window, so the generator is matched to
-  a cfg=1 teacher on nearly every row. Secondary: the same distribution almost never visits
-  sigma' <= 0.3 (~0.3% of rows), where fine detail is learnable (both working Iris
-  distillers sample the renoise level ~Uniform(0.02, 0.98) pre-shift, i.e. ~26% of rows
-  below sigma' 0.6 and ~8% below 0.3).
-- Fix status: the CFG-everywhere fix is committed (§22, cfb860e). The renoise sampler fix is
-  committed too (e2c1e05): u ~ Uniform(0.02, 0.98) pre-shift, clamp moved onto u (the old
-  post-shift clamp piled ~6% of rows on exactly sigma'=0.98; now 5.8% land in (0.98, 0.995),
-  which pentaCoxian's range also allows). Measured on 500k draws: median sigma' 0.800,
-  P(sigma'<=0.3)=0.081. 47 tests pass (CPU). Next: rerun the 16-prompt, 100-update
-  diagnostic as `runs/diagnostic_v4` (everything else unchanged; direct A/B vs v3).
-- Node iris-dsdmd-h100-s7 is awake under a 4-hour hold (until ~12:19 UTC 2026-10-23).
+- Verdict: the student's haze matched the unguided teacher (cfg=1.0 renders). On `diagnostic_v3`,
+  Beta(2.5, 1) + shift 4.0 put ~96% of rows at sigma' > 0.6 outside the old cfg_window=0.6, so
+  the generator was matched to cfg=1 on nearly every row. A separate issue: that sampler almost
+  never visited sigma' <= 0.3 (~0.3% of rows); see §24.
+- Fixes: CFG at every sigma' (§22, cfb860e); renoise sampler (§24, e2c1e05). Stage 8 rerun:
+  `runs/diagnostic_v4` via `scripts/run_diagnostic.sh` (same 16 prompts, 100 updates, warmup 200;
+  A/B vs v3). GPU smoke in progress as of 2026-10-23.
 
 
 ## 22. CFG window fix (2026-10-23)
@@ -415,3 +409,41 @@ Go/no-go:
 - Tests: window test and invariance test pin `cfg_window=0.6`; new `test_default_cfg_covers_high_noise_rows`. 47 pass (CPU).
 - NOT yet verified on GPU: the rerun on the H100 is the check (saturation vs teacher should stop falling).
 - Caveat: The paper found CFG over the full range hurt FID on ImageNet. The Iris distillers use it anyway, and the paper used a 1.1 scale, not 3.0. If the rerun oversaturates, the next lever is the CFG scale, not the window.
+
+## 24. Renoise sampler fix (2026-10-23)
+
+- Symptom (`diagnostic_v3`): student previews learned coarse layout (tree canopy, phoenix wings) but
+  stayed washed-out and blurry; mean chroma fell from ~0.08 toward ~0.065 while the teacher sits
+  ~0.28–0.46. Not collapse (pixel_std ~0.08, static guard clean).
+- Root cause: **double high-noise skew.** The paper draws τ ~ Beta(2.5, 1) on an **unshifted**
+  schedule (median σ' ≈ 0.76). Iris 1 MP training already applies `shift_sigma(..., 4.0)`, which
+  alone pushes mass toward σ' → 1 (median ≈ 0.80 for uniform pre-shift). Stacking Beta(2.5, 1)
+  before the shift gave median σ' ≈ 0.93; only **~0.3%** of rows had σ' ≤ 0.3, where per-pixel PiT
+  supervision can break the 16×16 patch grid. PentaCoxian's DMD2 LoRA uses `t_range (0.02, 0.98)`
+  pre-shift then the checkpoint shift — same one-skew recipe.
+- Fix (`src/engine/rollout.py::sample_shifted_sigma`, commit e2c1e05):
+  - Draw `u ~ Uniform(0.02, 0.98)` on CPU (checkpoint RNG still covers the draw).
+  - `sigma' = shift_sigma(u, shift)` with default `shift=4.0`; **no post-shift clamp** (bounds
+    σ' ∈ [shift(0.02), shift(0.98)] ≈ [0.075, 0.995]). Old code clamped σ' at 0.98 after shift,
+    piling ~6% of rows on exactly 0.98.
+  - Deliberately **not** added: micro-batch stratification of `u` (paper and pentaCoxian don't;
+    optional if step `r` still starves for low-noise rows).
+- Distribution check (500k draws, shift 4): median σ' **0.800**; P(σ' ≤ 0.3) **0.081**;
+  P(σ' ≤ 0.6) **0.263** — close to paper's unshifted Beta(2.5, 1) tail (0.278 at 0.6), better
+  than broken Beta+shift (0.039 at 0.6).
+- Tests: `tests/test_rollout.py::test_sigma_sampler_bounds_and_shape` pins median and low-σ' mass.
+  Same sampler feeds generator and critic turns (`trainer.py::_micro_batches`).
+- GPU verification: `diagnostic_v4` — expect preview chroma to **rise or hold** vs v3, not fall;
+  detail may still lag at 100 updates (under-trained), but mid-noise rows should receive signal.
+- Pair with §22 for the full v3 → v4 delta: guided teacher on every row **and** mid/low-σ' renoise.
+
+
+## For me, not for the AI Agent:
+study the 2 problems encountered during stage 8 overfit smoke test in detail.
+
+- read Gemini 4 Argon's solution to the both problems:
+Problem 1: teacher CFG is effectively off
+Problem 2: the renoise level is almost always very high
+
+- read Cursor chat's fix renoise level and fix teacher cfg
+

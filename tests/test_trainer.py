@@ -38,6 +38,8 @@ def test_20_turns_finite_schedule_and_live_adapters():
         kind, stats = tr.turn(batch_at(t))
         kinds.append(kind)
         assert all(map(torch.isfinite, (torch.tensor(stats["loss"]), torch.tensor(stats["grad_norm"]))))
+        if kind == "gen":
+            assert "lora_up_norm" in stats and stats["lora_up_norm"] > 0
     # warmup 2 fake, then (2 fake, 1 gen) repeating
     assert kinds[:8] == ["fake"] * 4 + ["gen"] + ["fake"] * 2 + ["gen"]
     assert tr.turns == 20 and tr.gen_updates == kinds.count("gen") and tr.fake_updates == kinds.count("fake")
@@ -70,13 +72,31 @@ def test_save_resume_reproduces_next_steps_exactly(tmp_path):
         assert all(torch.equal(sa[group][n], sb[group][n]) for n in sa[group]), group
 
 
+def test_sentinel_teacher_ratio_and_patience():
+    # 0.6 * teacher_std (0.30 -> 0.18)
+    sentinel = StdSentinel(teacher_std=0.30, ratio=0.6, patience=2, max_std=0.40)
+    assert abs(sentinel.min_std - 0.18) < 1e-6
+    # One low preview should not stop (patience=2)
+    assert not sentinel.update(0.17)
+    # Recovering back above threshold resets counter
+    assert not sentinel.update(0.22)
+    # One low preview again
+    assert not sentinel.update(0.17)
+    # Two low previews in a row trips
+    assert sentinel.update(0.17)
+    # Static explosion check (> max_std)
+    sentinel_static = StdSentinel(teacher_std=0.30, ratio=0.6, patience=2, max_std=0.40)
+    assert not sentinel_static.update(0.42)
+    assert sentinel_static.update(0.45)
+
+
 def test_fit_preview_sentinel_and_checkpoints(tmp_path):
     tr = make_trainer(tmp_path)
     tr.cfg.preview_every, tr.cfg.ckpt_every = 1, 1
     sentinel = StdSentinel(min_std=10.0, patience=2)  # impossible to satisfy -> trips at 2nd preview
     done = tr.fit(batches(), total_gen_updates=5, fixed_batch=batch_at(99), sentinel=sentinel, log=lambda _: None)
     assert done is False and tr.gen_updates == 2
-    assert len(list((tmp_path / "previews").rglob("*.png"))) == 16  # 4 rows x 2 previews x 2 (raw + ema)
+    assert len(list((tmp_path / "previews").rglob("*.png"))) == 32  # 4 rows x 2 previews x 2 steps x 2 (raw + ema)
     assert (tmp_path / "checkpoints" / "gen000002.pt").exists()
 
 

@@ -47,13 +47,13 @@ def build_real(args):
     from src.data.prompt_dataset import BucketBatchSampler
 
     def batches(start):  # infinite stream: epoch-cycling shuffles (resume: skip `start` batches)
-        skipped, epoch = start, 0
+        epoch, offset = divmod(start, len(BucketBatchSampler(cache.n)))
         while True:
             for k, b in enumerate(BucketBatchSampler(cache.n, seed=epoch)):
-                if k >= skipped:
+                if k >= offset:
                     y, mask = cache.get(b.indices)
                     yield {"y": y, "y_mask": mask, "hw": b.bucket_hw}
-            skipped, epoch = 0, epoch + 1
+            offset, epoch = 0, epoch + 1
 
     return model, (null, null_mask), batches, "cuda", torch.bfloat16
 
@@ -65,8 +65,9 @@ def main():
     ap.add_argument("--resume")
     ap.add_argument("--checkpoint", default="/home/dev/models/iris-3b")
     ap.add_argument("--cache", default=None, help="embedding cache dir from cache_embeddings.py")
+    ap.add_argument("--eval-cache", default=None, help="eval embedding cache dir (defaults to <cache>_eval)")
     ap.add_argument("--steps", type=int, default=2400, help="generator updates")
-    ap.add_argument("--preview-every", default="250", help="preview frequency in gen updates, or comma-separated steps (e.g. 10,20,40,60)")
+    ap.add_argument("--preview-every", default="50", help="preview frequency in gen updates, or comma-separated steps (e.g. 10,20,40,60)")
     ap.add_argument("--ckpt-every", type=int, default=250, help="checkpoint frequency in gen updates")
     ap.add_argument("--warmup", type=int, default=200, help="fake warmup updates")
     ap.add_argument("--fake-per-gen", type=int, default=4, help="critic updates per generator update")
@@ -78,7 +79,8 @@ def main():
         help="activation checkpointing (default full; pixel_only OOMs at micro-batch 4 on 80 GB)",
     )
     ap.add_argument("--ac-every", type=int, default=2)
-    ap.add_argument("--min-std", type=float, default=0.2, help="sentinel floor; 0.7 * teacher pixel std")
+    ap.add_argument("--min-std", type=float, default=None, help="sentinel floor (default: 0.6 * teacher pixel std)")
+    ap.add_argument("--std-ratio", type=float, default=0.6, help="sentinel collapse ratio relative to teacher std")
     ap.add_argument("--max-std", type=float, default=0.4, help="sentinel ceiling; abort on static explosion")
     args = ap.parse_args()
 
@@ -92,6 +94,7 @@ def main():
         model, (null, null_mask), batches, device, autocast = build_tiny()
         cfg = TrainConfig(warmup=2, fake_per_gen=2, micro_batch=2, num_steps=2, preview_every=2, ckpt_every=2)
         args.steps = min(args.steps, 4)
+        fixed = next(batches(10**6))
     else:
         model, (null, null_mask), batches, device, autocast = build_real(args)
         if args.overfit > 0:
@@ -102,6 +105,17 @@ def main():
                 while True:
                     yield {"y": fixed_y, "y_mask": fixed_mask, "hw": (1024, 1024)}
             batches = overfit_batches
+            fixed = {"y": fixed_y, "y_mask": fixed_mask, "hw": (1024, 1024)}
+        else:
+            from src.data.embed_cache import EmbedCache
+            eval_dir = Path(args.eval_cache) if args.eval_cache else (Path(args.cache).parent / (Path(args.cache).name + "_eval"))
+            if eval_dir.exists():
+                eval_cache = EmbedCache(str(eval_dir))
+                n_preview = min(4, eval_cache.n)
+                preview_y, preview_mask = eval_cache.get(list(range(n_preview)))
+                fixed = {"y": preview_y, "y_mask": preview_mask, "hw": (1024, 1024)}
+            else:
+                fixed = next(batches(10**6))
         cfg = TrainConfig(
             warmup=args.warmup,
             fake_per_gen=args.fake_per_gen,
@@ -114,9 +128,31 @@ def main():
     trainer = Trainer(model, null, null_mask, cfg, device=device, autocast_dtype=autocast, out_dir=args.out)
     if args.resume:
         trainer.load(args.resume)
+
+    teacher_std = None
+    if not args.tiny:
+        print("Rendering teacher preview baseline...", flush=True)
+        try:
+            teacher_std = trainer.render_teacher(fixed)
+            print(f"Teacher preview pixel std: {teacher_std:.4f}", flush=True)
+        except Exception as e:
+            print(f"Warning: teacher preview baseline failed ({e}), falling back to default min_std", flush=True)
+
+    sentinel = StdSentinel(
+        min_std=args.min_std,
+        max_std=args.max_std,
+        patience=2,
+        teacher_std=teacher_std,
+        ratio=args.std_ratio,
+    )
+    print(
+        f"StdSentinel active: bounds=[{sentinel.min_std:.4f}, {sentinel.max_std:.4f}], patience={sentinel.patience}"
+        + (f" (teacher_std={teacher_std:.4f})" if teacher_std is not None else ""),
+        flush=True,
+    )
+
     stream = batches(trainer.turns)  # resume: skip the batches already consumed
-    fixed = next(batches(10**6))  # fixed preview batch
-    ok = trainer.fit(stream, args.steps, fixed_batch=fixed, sentinel=StdSentinel(args.min_std, max_std=args.max_std, patience=1))
+    ok = trainer.fit(stream, args.steps, fixed_batch=fixed, sentinel=sentinel)
     trainer.save(Path(args.out) / "checkpoints" / "last.pt")
     sys.exit(0 if ok else 2)
 

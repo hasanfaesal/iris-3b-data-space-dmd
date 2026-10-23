@@ -14,20 +14,25 @@ from iris3b.flow.schedule import shift_sigma
 from ..models.lora import use_adapter
 
 
-def rollout_dataspace(model, z, y, y_mask, r: int, track_grad: bool = True) -> torch.Tensor:
+def rollout_dataspace(
+    model, z, y, y_mask, r: int, track_grad: bool = True, return_all_steps: bool = False
+) -> torch.Tensor | list[torch.Tensor]:
     """Run r+1 generator steps from zero; grad flows only through the last.
 
     Caller must run ``backward()`` inside ``use_adapter(model, "gen")`` for
     activation-checkpointing correctness.
     """
     x_hat = torch.zeros_like(z)
+    steps = [x_hat] if return_all_steps else None
     t_full = torch.full((z.shape[0],), 1000.0, dtype=torch.float32, device=z.device)
     with use_adapter(model, "gen"):
         for i in range(r + 1):
             with torch.set_grad_enabled(track_grad and i == r):
                 v = model(z, t_full, y, x0=x_hat, r=i, y_mask=y_mask).x
                 x_hat = z - v
-    return x_hat
+                if return_all_steps:
+                    steps.append(x_hat)
+    return steps if return_all_steps else x_hat
 
 
 def sample_shifted_sigma(batch: int, shift: float, device, u_range=(0.02, 0.98)) -> torch.Tensor:

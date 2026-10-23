@@ -43,7 +43,7 @@ class TrainConfig:
     shift: float = 4.0
     cfg_scale: float = 3.0
     cfg_window: float = 1.0  # shifted sigma' upper bound for CFG; 1.0 = every row
-    preview_every: int | list[int] | set[int] = 250  # generator updates; 0 disables, or list of steps
+    preview_every: int | list[int] | set[int] = 50  # generator updates; 0 disables, or list of steps
     ckpt_every: int = 250  # generator updates; 0 disables
 
 
@@ -78,8 +78,18 @@ class EMA:
 class StdSentinel:
     """Collapse guard: trips if pixel std collapses (< min_std) or explodes to static (> max_std)."""
 
-    def __init__(self, min_std: float = 0.2, max_std: float = 0.4, patience: int = 2):
+    def __init__(
+        self,
+        min_std: float | None = None,
+        max_std: float = 0.4,
+        patience: int = 2,
+        teacher_std: float | None = None,
+        ratio: float = 0.6,
+    ):
+        if min_std is None:
+            min_std = ratio * teacher_std if teacher_std is not None else 0.2
         self.min_std, self.max_std, self.patience, self.bad = min_std, max_std, patience, 0
+        self.teacher_std = teacher_std
 
     def update(self, std: float) -> bool:
         if std < self.min_std or std > self.max_std:
@@ -119,11 +129,10 @@ class Trainer:
         self.ema_slow = EMA(self.gen_params, cfg.ema_slow_decay)
         self.gen_updates = 0
         self.fake_updates = 0
-        self._initial_lora_up = {
-            n: p.detach().clone().norm().item()
-            for n, p in self.gen_params.items()
-            if "lora_up" in n
-        }
+        self._gen_up_params = [
+            p for n, p in self.gen_params.items()
+            if ".adapters.gen.1.weight" in n
+        ]
 
     # -- schedule ------------------------------------------------------------------
     @property
@@ -192,15 +201,9 @@ class Trainer:
         self.ema_slow.update(self.gen_updates)
         self.gen_updates += 1
 
-        # Relative lora_up growth
-        if self._initial_lora_up:
-            growths = []
-            for n, init_norm in self._initial_lora_up.items():
-                cur_norm = self.gen_params[n].detach().norm().item()
-                if init_norm > 1e-8:
-                    growths.append(cur_norm / init_norm)
-            if growths:
-                stats["lora_up_growth"] = sum(growths) / len(growths)
+        # Absolute lora_up norm across generator adapter layers
+        if self._gen_up_params:
+            stats["lora_up_norm"] = sum(p.detach().norm().item() for p in self._gen_up_params) / len(self._gen_up_params)
 
         return stats
 
@@ -218,45 +221,91 @@ class Trainer:
 
     # -- preview / sentinel ----------------------------------------------------------
     @torch.no_grad()
-    def _render_batch(self, batch, seed: int) -> torch.Tensor:
+    def _render_batch(self, batch, seed: int) -> list[torch.Tensor]:
         r = self.cfg.num_steps - 1
         g = torch.Generator(device=self.device).manual_seed(seed)
         h, w = batch["hw"]
-        images = []
-        for s in range(0, batch["y"].shape[0], self.cfg.micro_batch):
+        num_rows = batch["y"].shape[0]
+        steps_imgs = [[] for _ in range(r + 1)]
+        for s in range(0, num_rows, self.cfg.micro_batch):
             y = batch["y"][s : s + self.cfg.micro_batch].to(self.device)
             mask = batch["y_mask"][s : s + self.cfg.micro_batch].to(self.device)
             z = torch.randn(y.shape[0], 3, h, w, device=self.device, generator=g)
             with self._autocast():
-                images.append(rollout_dataspace(self.model, z, y, mask, r, track_grad=False).float().cpu())
-        return ((torch.cat(images) + 1) / 2).clamp(0, 1)
+                all_steps = rollout_dataspace(self.model, z, y, mask, r, track_grad=False, return_all_steps=True)
+                for step_idx in range(r + 1):
+                    steps_imgs[step_idx].append(all_steps[step_idx + 1].float().cpu())
+        return [((torch.cat(imgs) + 1) / 2).clamp(0, 1) for imgs in steps_imgs]
+
+    def render_teacher(self, batch, seed: int = 0, steps: int = 20, cfg_scale: float = 4.0, shift: float = 3.0) -> float:
+        """Render fixed batch with the teacher once at startup using FlowDPMSolver.
+
+        Returns the mean per-image pixel std of the teacher samples (in [0, 1]).
+        """
+        from PIL import Image
+        from iris3b.flow.solver import FlowDPMSolver
+
+        h, w = batch["hw"]
+        num_rows = batch["y"].shape[0]
+        g = torch.Generator(device=self.device).manual_seed(seed)
+        z = torch.randn(num_rows, 3, h, w, device=self.device, generator=g)
+
+        y = batch["y"].to(self.device)
+        mask = batch["y_mask"].to(self.device)
+        null = self.null.expand(num_rows, -1, -1, -1)
+        null_mask = self.null_mask.expand(num_rows, -1)
+        cfg_mask = torch.cat([null_mask, mask])
+
+        def model_fn(x, t, cond):
+            m = mask if cond is y else cfg_mask
+            with self._autocast(), use_adapter(self.model, "off"):
+                return self.model(x, t, cond, y_mask=m).x.float()
+
+        solver = FlowDPMSolver(model_fn, num_timesteps=1000, cfg_scale=cfg_scale, prediction="v")
+        sample = solver.sample(z, y, null if cfg_scale != 1.0 else None, steps=steps, order=2, shift=shift).clamp(-1, 1)
+        img = ((sample.float().cpu() + 1) / 2).clamp(0, 1)
+        teacher_std = img.flatten(1).std(1).mean().item()
+
+        if self.out_dir:
+            d_teacher = self.out_dir / "previews" / "teacher"
+            d_teacher.mkdir(parents=True, exist_ok=True)
+            for i, x in enumerate(img):
+                Image.fromarray((x.permute(1, 2, 0) * 255).round().byte().numpy()).save(d_teacher / f"{i:02d}.png")
+
+        return teacher_std
 
     @torch.no_grad()
     def preview(self, batch, step: int, seed: int = 0) -> tuple[float, float]:
-        """Render the fixed batch with both raw generator and EMA generator; dump PNGs.
+        """Render the fixed batch with both raw generator and EMA generator across all steps; dump PNGs.
 
-        Returns (raw_pixel_std, ema_pixel_std).
+        Returns (raw_pixel_std, ema_pixel_std) on the final refinement step.
         """
         from PIL import Image
 
         # 1. Raw generator weights
-        x_raw = self._render_batch(batch, seed)
-        raw_std = x_raw.flatten(1).std(1).mean().item()
+        steps_raw = self._render_batch(batch, seed)
+        raw_std = steps_raw[-1].flatten(1).std(1).mean().item()
 
         # 2. EMA weights
         with self.ema.applied():
-            x_ema = self._render_batch(batch, seed)
-        ema_std = x_ema.flatten(1).std(1).mean().item()
+            steps_ema = self._render_batch(batch, seed)
+        ema_std = steps_ema[-1].flatten(1).std(1).mean().item()
 
         if self.out_dir:
             d_raw = self.out_dir / "previews" / f"step{step:06d}_raw"
             d_ema = self.out_dir / "previews" / f"step{step:06d}_ema"
             d_raw.mkdir(parents=True, exist_ok=True)
             d_ema.mkdir(parents=True, exist_ok=True)
-            for i, img in enumerate(x_raw):
-                Image.fromarray((img.permute(1, 2, 0) * 255).round().byte().numpy()).save(d_raw / f"{i:02d}.png")
-            for i, img in enumerate(x_ema):
-                Image.fromarray((img.permute(1, 2, 0) * 255).round().byte().numpy()).save(d_ema / f"{i:02d}.png")
+            for r_idx, x_step in enumerate(steps_raw):
+                for i, img in enumerate(x_step):
+                    Image.fromarray((img.permute(1, 2, 0) * 255).round().byte().numpy()).save(
+                        d_raw / f"{i:02d}_r{r_idx}.png"
+                    )
+            for r_idx, x_step in enumerate(steps_ema):
+                for i, img in enumerate(x_step):
+                    Image.fromarray((img.permute(1, 2, 0) * 255).round().byte().numpy()).save(
+                        d_ema / f"{i:02d}_r{r_idx}.png"
+                    )
 
         return raw_std, ema_std
 
@@ -312,8 +361,8 @@ class Trainer:
             )
             if "v_diff" in stats:
                 msg += f" v_diff={stats['v_diff']:.4g}"
-            if "lora_up_growth" in stats:
-                msg += f" up_growth={stats['lora_up_growth']:.3f}"
+            if "lora_up_norm" in stats:
+                msg += f" up_norm={stats['lora_up_norm']:.4f}"
             log(msg)
             if kind != "gen":
                 continue

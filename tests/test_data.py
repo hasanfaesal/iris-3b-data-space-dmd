@@ -63,6 +63,27 @@ def test_epoch_deterministic(dataset):
     assert len(epoch(1)) == len(epoch(2))
 
 
+def test_batches_resume_across_epochs():
+    # Verify stream resumption across multiple epoch boundaries matches full un-resumed run
+    n = 50
+    sampler_len = len(BucketBatchSampler(n))
+
+    def make_stream(start):
+        epoch, offset = divmod(start, sampler_len)
+        while True:
+            for k, b in enumerate(BucketBatchSampler(n, seed=epoch)):
+                if k >= offset:
+                    yield (epoch, k, b.indices)
+            offset, epoch = 0, epoch + 1
+
+    stream = make_stream(0)
+    full = [next(stream) for _ in range(sampler_len * 5)]
+    for start in [1, sampler_len - 1, sampler_len, sampler_len + 5, sampler_len * 2 + 3]:
+        r_stream = make_stream(start)
+        resumed = [next(r_stream) for _ in range(5)]
+        assert resumed == full[start : start + 5]
+
+
 def test_normalize_prompt():
     assert normalize_prompt("  a \n  b\t c ") == "a b c"
 
