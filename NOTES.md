@@ -379,6 +379,29 @@ Go/no-go:
   - The diffuse silhouette behavior is confirmed to be an under-warmed critic ($v_{\text{fake}}$). With `warmup=20`, the critic has not learned the generator's distribution, making the update direction dominated by the teacher's CFG expectation.
   - Next training test: set `--warmup 200` to allow the critic to establish an accurate boundary before student updates begin.
 
+## 23. No-CFG teacher check: the missing-CFG diagnosis is confirmed (2026-10-23)
+
+- `scripts/teacher_nocfg_check.py`: official `FlowDPMSolver`, prompts 02/04, 20 steps,
+  order 2, shift 3.0, seed 0, cached 300-token embeddings — identical to the §21 render
+  except `cfg_scale` (and §21 is reproduced exactly by the cfg=4.0 row, so guidance is the
+  only changed variable).
+- Results (pixel_std / mean chroma, [0, 1] scale):
+  - cfg=1.0: 02 → 0.144 / 0.228; 04 → 0.182 / 0.180. Visually the same muted, washed-out
+    haze as the student previews.
+  - cfg=3.0: 02 → 0.264 / 0.402; 04 → 0.288 / 0.279.
+  - cfg=4.0: 02 → 0.308 / 0.458; 04 → 0.305 / 0.276 (= §21).
+- Verdict: the student's haze IS the unguided teacher. Beta(2.5, 1) + shift 4.0 puts ~96%
+  of training rows at sigma' > 0.6, outside our cfg_window, so the generator is matched to
+  a cfg=1 teacher on nearly every row. Secondary: the same distribution almost never visits
+  sigma' <= 0.3 (~0.3% of rows), where fine detail is learnable (both working Iris
+  distillers sample the renoise level ~Uniform(0.02, 0.98) pre-shift, i.e. ~26% of rows
+  below sigma' 0.6 and ~8% below 0.3).
+- Fix status: the CFG-everywhere fix is already committed (§22, cfb860e). The renoise sampler is
+  still Beta(2.5,1)+shift (σ' median 0.93; ~0.3% of rows below σ' 0.3); switching to
+  u ~ Uniform(0.02, 0.98) pre-shift (pentaCoxian's recipe, σ' median 0.80, ~8% below 0.3) is
+  the remaining open decision before the Stage 8 rerun.
+- Node iris-dsdmd-h100-s7 is awake under a 4-hour hold (until ~12:19 UTC 2026-10-23).
+
 
 ## 22. CFG window fix (2026-10-23)
 

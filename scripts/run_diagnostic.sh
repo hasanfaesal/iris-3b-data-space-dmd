@@ -1,7 +1,7 @@
 #!/bin/bash
 set -u
 
-OUT_DIR="runs/diagnostic_v3"
+OUT_DIR="runs/diagnostic_v4"
 LOG_FILE="/home/dev/diagnostic_v3.log"
 
 echo "=== Starting diagnostic run at $(date -u) ===" | tee "$LOG_FILE"

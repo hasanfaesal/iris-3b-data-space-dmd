@@ -79,8 +79,8 @@ def test_rollout_grads_reach_gen_adapter():
 
 
 def test_sigma_sampler_bounds_and_shape():
-    sig = sample_shifted_sigma(256, shift=4.0, device="cpu")
-    assert sig.shape == (256,)
-    assert (sig >= 0.02).all() and (sig <= 0.98).all()
-    # Beta(2.5, 1) shifted concentrates on high noise
-    assert sig.mean() > 0.5
+    sig = sample_shifted_sigma(100_000, shift=4.0, device="cpu")
+    assert sig.shape == (100_000,)
+    assert sig.min() >= 0.0754 and sig.max() <= 0.9950   # shift(0.02)=0.07547, shift(0.98)=0.99492
+    assert 0.75 < sig.median() < 0.85                     # analytic 0.80
+    assert 0.07 < (sig <= 0.3).float().mean() < 0.09      # analytic 0.080; Beta+shift gave 0.003

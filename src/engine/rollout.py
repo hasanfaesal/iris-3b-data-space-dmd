@@ -30,12 +30,13 @@ def rollout_dataspace(model, z, y, y_mask, r: int, track_grad: bool = True) -> t
     return x_hat
 
 
-def sample_shifted_sigma(batch: int, shift: float, device, clamp=(0.02, 0.98)) -> torch.Tensor:
-    """DMD noising time: tau ~ Beta(2.5, 1) mapped through Iris's shift.
+def sample_shifted_sigma(batch: int, shift: float, device, u_range=(0.02, 0.98)) -> torch.Tensor:
+    """DMD noising time: u ~ Uniform(0.02, 0.98) mapped through Iris's shift.
 
-    Beta(2.5, 1) concentrates on high noise (mean ~0.71), matching the paper's
-    choice; the shift maps to the noise level the network is conditioned on
-    (t = 1000 * sigma'). Clamped after the shift (PLAN.md's convention).
+    The shift alone skews toward high noise (density 16x higher at sigma'=1 than
+    at 0 for shift 4), landing near the paper's unshifted Beta(2.5, 1) (median
+    sigma' 0.80 vs 0.76). Beta on top of the shift skewed twice: 0.3% of rows
+    reached sigma' <= 0.3, where within-patch detail is visible.
     """
-    u = torch.distributions.Beta(2.5, 1.0).sample((batch,))
-    return shift_sigma(u, shift).clamp(*clamp).to(device)
+    u = torch.empty(batch).uniform_(*u_range)
+    return shift_sigma(u, shift).to(device)

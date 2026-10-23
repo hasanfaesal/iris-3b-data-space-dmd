@@ -1,0 +1,16 @@
+Loading model...
+Loading embeddings...
+
+--- Sampling cfg=1.0 ---
+cfg=1.0 prompt 02: pixel_std=0.144 chroma=0.228
+cfg=1.0 prompt 04: pixel_std=0.182 chroma=0.180
+
+--- Sampling cfg=3.0 ---
+cfg=3.0 prompt 02: pixel_std=0.264 chroma=0.402
+cfg=3.0 prompt 04: pixel_std=0.288 chroma=0.279
+
+--- Sampling cfg=4.0 ---
+cfg=4.0 prompt 02: pixel_std=0.308 chroma=0.458
+cfg=4.0 prompt 04: pixel_std=0.305 chroma=0.276
+
+Done!
