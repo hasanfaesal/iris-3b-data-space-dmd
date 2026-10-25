@@ -369,14 +369,21 @@ def main():
         model_card = None
         if args.create_model_card:
             eval_summary = None
-            for summary_path in [out_path.parent / "eval_results.json", Path("runs/benchmark_eval/eval_results.json")]:
-                if summary_path.exists():
+            for summary_path in [
+                Path(args.images_dir) / "eval_results.json" if args.images_dir else None,
+                out_path.parent / "eval_results.json",
+                Path("runs/benchmark_eval_200/eval_results.json"),
+                Path("runs/benchmark_eval/eval_results.json"),
+            ]:
+                if summary_path and summary_path.exists():
                     try:
                         with open(summary_path) as f:
                             data = json.load(f)
                             eval_summary = data.get("summary")
                     except Exception:
                         pass
+                    break
+            model_card = generate_model_card(args.hf_repo, meta, eval_summary=eval_summary)
                     break
             model_card = generate_model_card(args.hf_repo, meta, eval_summary=eval_summary)
 
