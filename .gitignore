@@ -9,3 +9,5 @@ previews/
 runs/
 output/
 logs/
+dashboard/
+write_node.py
