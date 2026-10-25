@@ -341,15 +341,22 @@ def main():
     model, _ = load_dataspace_iris(args.base_model)
     model.eval().to(device)
 
-    # Inject LoRA for "gen"
-    print("Injecting LoRA adapters...")
-    inject_lora(model, "gen", rank=64, alpha=64.0)
-
     # Load checkpoint states
     print(f"Loading checkpoint {args.checkpoint}...")
     ckpt_main = load_checkpoint(args.checkpoint)
     fast_ema_state = ckpt_main["ema"]
     slow_ema_state = ckpt_main.get("ema_slow", fast_ema_state)
+
+    # Detect LoRA rank from checkpoint
+    detected_rank = 64
+    for k, v in fast_ema_state.items():
+        if ".down.weight" in k:
+            detected_rank = v.shape[0]
+            break
+
+    # Inject LoRA for "gen"
+    print(f"Injecting LoRA adapters (rank={detected_rank})...")
+    inject_lora(model, "gen", rank=detected_rank, alpha=float(detected_rank))
 
     mid_state = None
     if args.mid_checkpoint and Path(args.mid_checkpoint).exists():
