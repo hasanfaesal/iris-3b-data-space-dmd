@@ -29,7 +29,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [
     str(ROOT),
     str(ROOT / "vendor" / "iris-3b"),
+    str(ROOT / "vendor" / "iris-3b" / "src"),
     str(ROOT / "vendor" / "iris-3b-turbo"),
+    str(ROOT / "vendor" / "iris-3b-turbo" / "src"),
 ]
 
 from src.data.embed_cache import EmbedCache, load_null
