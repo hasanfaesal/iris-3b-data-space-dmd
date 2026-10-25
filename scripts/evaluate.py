@@ -350,7 +350,7 @@ def main():
     # Detect LoRA rank from checkpoint
     detected_rank = 64
     for k, v in fast_ema_state.items():
-        if ".down.weight" in k:
+        if ".adapters.gen.0.weight" in k or ".down.weight" in k:
             detected_rank = v.shape[0]
             break
 
