@@ -384,8 +384,6 @@ def main():
                         pass
                     break
             model_card = generate_model_card(args.hf_repo, meta, eval_summary=eval_summary)
-                    break
-            model_card = generate_model_card(args.hf_repo, meta, eval_summary=eval_summary)
 
         upload_to_huggingface(
             repo_id=args.hf_repo,
