@@ -6,8 +6,8 @@ from pathlib import Path
 import time
 from huggingface_hub import HfApi
 
-REPO_ID = "hasanfaesal/iris-3b-dataspace-dmd-turbo"
-ROOT = Path("/home/dev/h100-2")
+REPO_ID = os.environ.get("HF_REPO_ID", "hasanfaesal/iris-3b-dataspace-dmd-turbo")
+ROOT = Path(__file__).resolve().parents[2]
 
 api = HfApi()
 

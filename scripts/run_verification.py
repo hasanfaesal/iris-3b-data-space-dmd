@@ -20,6 +20,7 @@ import contextlib
 import copy
 import gc
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -256,7 +257,7 @@ def ramp(model, y, mask, null, null_mask, hw, device, args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--checkpoint", default="/home/dev/models/iris-3b", help="exported dir: config.yaml + model.safetensors")
+    ap.add_argument("--checkpoint", default=os.environ.get("IRIS_MODEL_DIR", "models/iris-3b"), help="exported dir: config.yaml + model.safetensors")
     ap.add_argument("--out", required=True)
     ap.add_argument("--tiny", action="store_true", help="CPU dry run on the tiny fixture (logic check only)")
     ap.add_argument("--tol", type=float, default=0.05, help="max relative L2 velocity error, bf16 vs fp32 teacher")

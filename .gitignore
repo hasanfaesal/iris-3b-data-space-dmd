@@ -1,13 +1,16 @@
 *.pdf
 *.md
+*.log
 !README.md
-!NOTES.md
 vendor/
 .venv/
 __pycache__/
+.pytest_cache/
+.cursor/
 previews/
 runs/
 output/
+eval_images/
 logs/
 dashboard/
 write_node.py

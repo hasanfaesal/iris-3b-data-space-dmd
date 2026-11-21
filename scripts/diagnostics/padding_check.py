@@ -35,7 +35,7 @@ from pathlib import Path
 
 import torch
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT / "tests")]
 
 T_VALUES = (1000.0, 600.0, 200.0)
@@ -44,8 +44,8 @@ T_VALUES = (1000.0, 600.0, 200.0)
 def parse_args():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--cache", default="/home/dev/cache", help="embedding cache dir (cache_embeddings.py output)")
-    ap.add_argument("--checkpoint", default="/home/dev/models/iris-3b")
+    ap.add_argument("--cache", default="cache", help="embedding cache dir (cache_embeddings.py output)")
+    ap.add_argument("--checkpoint", default="models/iris-3b")
     ap.add_argument("--prompts", default=str(ROOT / "data" / "prompts_train.jsonl"),
                     help="jsonl the cache rows were built from (row i = line i); for the log only")
     ap.add_argument("--n", type=int, default=16, help="prompts per group; 'first' group = the overfit set")

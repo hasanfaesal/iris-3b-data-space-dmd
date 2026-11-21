@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -267,11 +268,11 @@ def sample_teacher(
 @torch.no_grad()
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--base-model", default="/home/dev/models/iris-3b", help="Path to base Iris-3B checkpoint")
+    ap.add_argument("--base-model", default=os.environ.get("IRIS_MODEL_DIR", "models/iris-3b"), help="Path to base Iris-3B checkpoint")
     ap.add_argument("--checkpoint", default="checkpoints/last.pt", help="Path to our trainer checkpoint")
     ap.add_argument("--mid-checkpoint", default=None, help="Path to mid-run checkpoint (e.g. checkpoints/gen001500.pt)")
     ap.add_argument("--eval-prompts", default="data/prompts_eval.jsonl", help="Evaluation prompts jsonl")
-    ap.add_argument("--eval-cache", default="/home/dev/cache_eval", help="Directory with pre-cached eval embeddings")
+    ap.add_argument("--eval-cache", default=os.environ.get("IRIS_EVAL_CACHE", "cache_eval"), help="Directory with pre-cached eval embeddings")
     ap.add_argument("--out", default="runs/benchmark_eval", help="Output directory")
     ap.add_argument("--batch-size", type=int, default=8, help="Batch size for parallel forward passes")
     ap.add_argument("--steps", type=int, default=4, help="Data-space rollout steps for our model (r=steps-1)")

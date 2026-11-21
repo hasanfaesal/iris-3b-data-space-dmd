@@ -119,6 +119,10 @@ def test_evaluate_end_to_end_synthetic(tmp_path, monkeypatch):
 
     monkeypatch.setattr(evaluate, "inject_lora", mock_inject_lora)
 
+    # Keep synthetic unit test offline/fast without downloading CLIP or LPIPS weights
+    monkeypatch.setattr(evaluate.OptionalCLIPScore, "__init__", lambda self, device, model_name="": setattr(self, "model", None) or setattr(self, "processor", None))
+    monkeypatch.setattr(evaluate.OptionalLPIPS, "__init__", lambda self, device: setattr(self, "loss_fn", None))
+
     out_dir = tmp_path / "eval_out"
 
     test_args = [

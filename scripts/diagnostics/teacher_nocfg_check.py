@@ -3,17 +3,19 @@ A washed-out result confirms the student is faithfully matching an unguided
 teacher (Problem 1: Beta(2.5,1)+shift puts ~96% of rows outside the CFG window).
 Also renders cfg=3.0 and cfg=4.0 for a complete, self-contained comparison.
 """
+import os
 import sys
 from pathlib import Path
 import torch
 from PIL import Image
 
-sys.path[:0] = [str(Path(__file__).resolve().parents[1])]
+sys.path[:0] = [str(Path(__file__).resolve().parents[2])]
 from iris3b.flow.solver import FlowDPMSolver  # noqa: E402
 from src.data.embed_cache import EmbedCache, load_null  # noqa: E402
 from src.models.loading import load_dataspace_iris  # noqa: E402
 
-CKPT, CACHE = "/home/dev/models/iris-3b", "/home/dev/cache"
+CKPT = os.environ.get("IRIS_MODEL_DIR", "models/iris-3b")
+CACHE = os.environ.get("IRIS_CACHE_DIR", "cache")
 PROMPTS = [2, 4]  # the 02.png / 04.png used everywhere so far
 STEPS, ORDER, SHIFT, SEED = 20, 2, 3.0, 0  # exactly the s21 settings
 

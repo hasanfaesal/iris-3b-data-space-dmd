@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import itertools
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -124,7 +125,7 @@ def build_real(args):
 
     cache = EmbedCache(args.cache)
     null, null_mask = load_null(args.cache)
-    model, _ = load_dataspace_iris("/home/dev/models/iris-3b")
+    model, _ = load_dataspace_iris(args.checkpoint)
     model.train()  # Iris checkpoints activations only in train mode
     model.set_activation_checkpointing(args.ac, args.ac_every)
 
@@ -147,7 +148,7 @@ def main():
     ap.add_argument("--tiny", action="store_true")
     ap.add_argument("--out", required=True)
     ap.add_argument("--resume")
-    ap.add_argument("--checkpoint", default="/home/dev/models/iris-3b")
+    ap.add_argument("--checkpoint", default=os.environ.get("IRIS_MODEL_DIR", "models/iris-3b"))
     ap.add_argument("--cache", default=None, help="embedding cache dir from cache_embeddings.py")
     ap.add_argument("--eval-cache", default=None, help="eval embedding cache dir (defaults to <cache>_eval)")
     ap.add_argument("--steps", type=int, default=2400, help="generator updates")

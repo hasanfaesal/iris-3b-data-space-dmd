@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -48,21 +49,24 @@ def turbo_times(steps: int = 4, shift: float = 4.0) -> list[float]:
 @torch.no_grad()
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base-model", default="/home/dev/models/iris-3b")
+    ap.add_argument("--base-model", default=os.environ.get("IRIS_MODEL_DIR", "models/iris-3b"))
     ap.add_argument(
         "--pentacoxian-adapter",
-        default="/home/dev/.cache/huggingface/hub/models--pentacoxian-dev--iris-3b-turbo-lora/snapshots/fe16b3496eb440585993c92d95641c08c6b08263/r2-1000/student.safetensors",
+        default=os.environ.get("PENTACOXIAN_ADAPTER", ""),
+        help="Path to PentaCoxian DMD2 LoRA student.safetensors",
     )
     ap.add_argument(
         "--official-model",
-        default="/home/dev/.cache/huggingface/hub/models--speridlabs--iris-3b/snapshots/adc05b909fb05d4276d26aae5a52b36406b2ef26/turbo/model.safetensors",
+        default=os.environ.get("OFFICIAL_TURBO_MODEL", ""),
+        help="Path to official Iris-3B Turbo model.safetensors",
     )
     ap.add_argument(
         "--official-config",
-        default="/home/dev/.cache/huggingface/hub/models--speridlabs--iris-3b/snapshots/adc05b909fb05d4276d26aae5a52b36406b2ef26/turbo/config.yaml",
+        default=os.environ.get("OFFICIAL_TURBO_CONFIG", ""),
+        help="Path to official Iris-3B Turbo config.yaml",
     )
     ap.add_argument("--eval-prompts", default="data/prompts_eval.jsonl")
-    ap.add_argument("--eval-cache", default="/home/dev/cache_eval")
+    ap.add_argument("--eval-cache", default=os.environ.get("IRIS_EVAL_CACHE", "cache_eval"))
     ap.add_argument("--out", default="runs/benchmark_eval_200")
     ap.add_argument("--batch-size", type=int, default=8)
     ap.add_argument("--seed", type=int, default=42)

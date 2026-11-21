@@ -90,7 +90,7 @@ def main() -> None:
     ap.add_argument("--prompts", default="data/prompts_train.jsonl")
     ap.add_argument("--eval-prompts", default="data/prompts_eval.jsonl")
     ap.add_argument("--out", required=True)
-    ap.add_argument("--checkpoint", default="/home/dev/models/iris-3b")
+    ap.add_argument("--checkpoint", default=os.environ.get("IRIS_MODEL_DIR", "models/iris-3b"))
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--verify", type=int, default=0, help="re-encode N random rows and compare")
     args = ap.parse_args()

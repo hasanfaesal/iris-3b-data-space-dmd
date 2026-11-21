@@ -1,0 +1,36 @@
+[project]
+name = "iris-3b-data-space-dmd"
+version = "0.1.0"
+description = "4-step data-space DMD2 distillation of the Iris-3B pixel-space diffusion transformer"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+authors = [{ name = "Hasan Faesal" }]
+dependencies = [
+    "torch>=2.7.1",
+    "torchvision>=0.21",
+    "transformers>=4.57.0",
+    "accelerate>=1.2",
+    "omegaconf>=2.3",
+    "safetensors>=0.4",
+    "huggingface_hub>=0.26",
+    "pillow>=10.0",
+    "numpy>=1.26",
+    "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+eval = ["lpips>=0.1.4"]
+dev = ["pytest>=8.0", "ruff>=0.8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src", "scripts", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]

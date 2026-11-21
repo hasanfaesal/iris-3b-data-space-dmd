@@ -15,7 +15,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [
     str(ROOT),
     str(ROOT / "vendor" / "iris-3b"),
@@ -110,7 +110,7 @@ def compute_image_metrics(img_np: np.ndarray) -> dict:
 @torch.no_grad()
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--checkpoint", default="/home/dev/models/iris-3b")
+    ap.add_argument("--checkpoint", default="models/iris-3b")
     ap.add_argument("--out", default="runs/teacher_realism_check")
     ap.add_argument("--steps", type=int, default=20)
     ap.add_argument("--cfg", type=float, default=3.5)
